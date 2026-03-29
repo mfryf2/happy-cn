@@ -82,6 +82,14 @@ We're engineers scattered across Bay Area coffee shops and hacker houses, consta
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** - Development setup including iOS, Android, and macOS desktop variant builds
 - **[Edit docs at github.com/slopus/slopus.github.io](https://github.com/slopus/slopus.github.io)** - Help improve our documentation and guides
 
+## 🇨🇳 中国大陆用户
+
+官方服务在国内无法访问。如果你在中国大陆使用中转 API 或内部定制版 Claude Code，请查看：
+
+**[📖 中文使用指南 README.zh.md](./README.zh.md)**
+
+涵盖三种场景：中转 API · 内部定制版 · 自建服务器
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.

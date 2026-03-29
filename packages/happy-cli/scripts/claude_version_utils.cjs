@@ -480,18 +480,31 @@ function getClaudeCliPath() {
 function runClaudeCli(cliPath) {
     const { pathToFileURL } = require('url');
     const { spawn } = require('child_process');
-    
+    const fs = require('fs');
+
     // Check if it's a JavaScript file (.js or .cjs) or a binary file
     const isJsFile = cliPath.endsWith('.js') || cliPath.endsWith('.cjs');
 
+    // Check if the JS file has a shebang (standalone executable script like claude-internal)
+    // These must be spawned directly, not imported, to preserve TTY/interactive mode
+    let hasShebang = false;
     if (isJsFile) {
-        // JavaScript file - use import to keep interceptors working
+        try {
+            const fd = fs.openSync(cliPath, 'r');
+            const buf = Buffer.alloc(2);
+            fs.readSync(fd, buf, 0, 2, 0);
+            fs.closeSync(fd);
+            hasShebang = buf[0] === 0x23 && buf[1] === 0x21; // '#!'
+        } catch (e) {}
+    }
+
+    if (isJsFile && !hasShebang) {
+        // Pure JS module - use import to keep interceptors working
         const importUrl = pathToFileURL(cliPath).href;
         import(importUrl);
     } else {
-        // Binary file (e.g., Homebrew installation) - spawn directly
-        // Note: Interceptors won't work with binary files, but that's acceptable
-        // as binary files are self-contained and don't need interception
+        // Binary file or standalone executable JS (e.g., claude-internal with shebang)
+        // Must spawn directly to preserve TTY and interactive mode
         const args = process.argv.slice(2);
         const child = spawn(cliPath, args, {
             stdio: 'inherit',
