@@ -302,7 +302,7 @@ yarn workspace happy build
 ```bash
 export HAPPY_SERVER_URL="https://your-domain.com"
 export HAPPY_WEBAPP_URL="https://your-domain.com"
-alias happy="node /path/to/happy-cn/packages/happy-cli/dist/index.mjs"
+alias happy="node ~/happy-cn/packages/happy-cli/dist/index.mjs"
 ```
 
 **场景二（公司定制版）：**
@@ -310,7 +310,7 @@ alias happy="node /path/to/happy-cn/packages/happy-cli/dist/index.mjs"
 export HAPPY_CLAUDE_PATH="/path/to/your-custom-claude"  # 改为你的定制版路径
 export HAPPY_SERVER_URL="https://your-domain.com"
 export HAPPY_WEBAPP_URL="https://your-domain.com"
-alias happy="node /path/to/happy-cn/packages/happy-cli/dist/index.mjs"
+alias happy="node ~/happy-cn/packages/happy-cli/dist/index.mjs"
 ```
 
 ```bash

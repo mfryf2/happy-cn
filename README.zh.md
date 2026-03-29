@@ -66,9 +66,11 @@ yarn workspace happy build
 4. **在 `~/.zshrc`（或 `~/.bashrc`）中添加 alias**：
 
 ```bash
-# 替换为你的实际路径
-alias happy="node /path/to/happy-cn/packages/happy-cli/dist/index.mjs"
+# 把 ~/happy-cn 替换为你实际克隆的目录路径
+alias happy="node ~/happy-cn/packages/happy-cli/dist/index.mjs"
 ```
+
+> `dist/index.mjs` 是编译产物，克隆后需要先执行第三步的 `yarn workspace happy build` 才会生成。
 
 ```bash
 source ~/.zshrc
@@ -91,7 +93,7 @@ source ~/.zshrc
 ```bash
 export HAPPY_SERVER_URL="https://happy.mingbaibao.com"
 export HAPPY_WEBAPP_URL="https://happy.mingbaibao.com"
-alias happy="node /path/to/happy-cn/packages/happy-cli/dist/index.mjs"
+alias happy="node ~/happy-cn/packages/happy-cli/dist/index.mjs"
 ```
 
 > `HAPPY_CLAUDE_PATH` 不需要设置，happy 会自动找到系统中的 `claude` 命令。
@@ -150,7 +152,7 @@ which your-claude-command   # 替换为你公司定制版的命令名
 export HAPPY_CLAUDE_PATH="/opt/homebrew/bin/your-claude-command"  # 改为你的实际路径
 export HAPPY_SERVER_URL="https://happy.mingbaibao.com"
 export HAPPY_WEBAPP_URL="https://happy.mingbaibao.com"
-alias happy="node /path/to/happy-cn/packages/happy-cli/dist/index.mjs"
+alias happy="node ~/happy-cn/packages/happy-cli/dist/index.mjs"
 ```
 
 ```bash
