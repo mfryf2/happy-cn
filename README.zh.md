@@ -226,6 +226,53 @@ happy   # 启动你的定制版 Claude Code，支持远程控制
 
 ---
 
+## 一键更新
+
+### 本地更新（同步官方代码 + 重新编译 CLI）
+
+```bash
+bash scripts/update-local.sh
+```
+
+自动完成：拉取官方最新代码 → 合并 → 重新编译 → 推送到你的 fork。
+
+### 服务端更新（更新服务器上的后端和 Web App）
+
+**第一步：配置服务器信息（只需一次）**
+
+```bash
+export HAPPY_SERVER_HOST="你的服务器IP"
+export HAPPY_DOMAIN="your-domain.com"
+export HAPPY_SSH_KEY="~/.ssh/id_ed25519"  # 可选，默认值
+```
+
+或者直接写入 `~/.zshrc` 永久保存。
+
+**第二步：一键更新**
+
+```bash
+# 更新后端 + 前端（全量）
+bash scripts/update-server.sh
+
+# 只更新后端服务
+bash scripts/update-server.sh --server-only
+
+# 只更新前端 Web App
+bash scripts/update-server.sh --webapp-only
+```
+
+### 完整更新流程（官方有新版本时）
+
+```bash
+# 第一步：更新本地
+bash scripts/update-local.sh
+
+# 第二步：更新服务器
+bash scripts/update-server.sh
+```
+
+---
+
 ## 与上游的差异
 
 本仓库基于 [slopus/happy](https://github.com/slopus/happy)，仅做了以下改动：
