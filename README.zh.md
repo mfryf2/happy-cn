@@ -53,24 +53,42 @@ Anthropic 官方推出了 [Remote Control](https://code.claude.com/docs/zh-CN/re
 ## 前置条件（所有场景通用）
 
 1. **Mac/Linux 本地环境**，已能正常运行 `claude`（或你的定制版本）
-2. **Node.js 18+**，推荐通过 nvm 安装
-3. **克隆本仓库并编译**：
+
+2. **安装 Node.js 18+**
+
+   ```bash
+   # 检查是否已安装
+   node --version   # 需要 v18 或以上
+   ```
+
+   没有的话用 Homebrew 安装：
+   ```bash
+   brew install node
+   ```
+
+3. **安装 yarn**
+
+   ```bash
+   npm install -g yarn
+   ```
+
+4. **克隆仓库并编译**：
 
 ```bash
-git clone https://github.com/mfryf2/happy-cn.git
-cd happy-cn
+git clone https://github.com/mfryf2/happy-cn.git ~/happy-cn
+cd ~/happy-cn
 yarn install
-yarn workspace happy build
+yarn workspace happy build   # 编译完成后才会生成 dist/index.mjs
 ```
 
-4. **在 `~/.zshrc`（或 `~/.bashrc`）中添加 alias**：
+5. **在 `~/.zshrc`（或 `~/.bashrc`）中添加 alias**：
 
 ```bash
 # 把 ~/happy-cn 替换为你实际克隆的目录路径
 alias happy="node ~/happy-cn/packages/happy-cli/dist/index.mjs"
 ```
 
-> `dist/index.mjs` 是编译产物，克隆后需要先执行第三步的 `yarn workspace happy build` 才会生成。
+> `dist/index.mjs` 是编译产物，克隆后需要先执行第四步的 `yarn workspace happy build` 才会生成。
 
 ```bash
 source ~/.zshrc
