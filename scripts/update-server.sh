@@ -144,11 +144,12 @@ if [ "$UPDATE_WEBAPP" = true ]; then
     APP_ENV=production \
     yarn workspace happy-app expo export \
         --platform web \
-        --output-dir packages/happy-app/dist-self-hosted
+        --output-dir dist-self-hosted
 
     echo "📦 打包前端..."
     cd packages/happy-app
     tar -czf /tmp/happy-webapp.tar.gz dist-self-hosted
+    rm -rf dist-self-hosted
     cd "$REPO_DIR"
 
     echo "⬆️  上传到服务器..."
