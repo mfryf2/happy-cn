@@ -13,6 +13,7 @@ import { hashObject } from '@/utils/deterministicJson';
 import { startCaffeinate, stopCaffeinate } from '@/utils/caffeinate';
 import { extractSDKMetadataAsync } from '@/claude/sdk/metadataExtractor';
 import { parseSpecialCommand } from '@/parsers/specialCommands';
+import { extractTextOrEmpty, normalizeContent } from '@slopus/happy-wire';
 import { getEnvironmentInfo } from '@/ui/doctor';
 import { configuration } from '@/configuration';
 import { notifyDaemonSessionStarted } from '@/daemon/controlClient';
@@ -336,7 +337,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         }
 
         // Check for special commands before processing
-        const specialCommand = parseSpecialCommand(message.content.text);
+        const specialCommand = parseSpecialCommand(extractTextOrEmpty(normalizeContent(message.content)));
 
         if (specialCommand.type === 'compact') {
             logger.debug('[start] Detected /compact command');
@@ -349,7 +350,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
                 allowedTools: messageAllowedTools,
                 disallowedTools: messageDisallowedTools
             };
-            messageQueue.pushIsolateAndClear(specialCommand.originalMessage || message.content.text, enhancedMode);
+            messageQueue.pushIsolateAndClear(specialCommand.originalMessage || extractTextOrEmpty(normalizeContent(message.content)), enhancedMode);
             logger.debugLargeJson('[start] /compact command pushed to queue:', message);
             return;
         }
@@ -365,7 +366,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
                 allowedTools: messageAllowedTools,
                 disallowedTools: messageDisallowedTools
             };
-            messageQueue.pushIsolateAndClear(specialCommand.originalMessage || message.content.text, enhancedMode);
+            messageQueue.pushIsolateAndClear(specialCommand.originalMessage || extractTextOrEmpty(normalizeContent(message.content)), enhancedMode);
             logger.debugLargeJson('[start] /compact command pushed to queue:', message);
             return;
         }
@@ -380,7 +381,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             allowedTools: messageAllowedTools,
             disallowedTools: messageDisallowedTools
         };
-        messageQueue.push(message.content.text, enhancedMode);
+        messageQueue.push(extractTextOrEmpty(normalizeContent(message.content)), enhancedMode);
         logger.debugLargeJson('User message pushed to queue:', message)
     });
 

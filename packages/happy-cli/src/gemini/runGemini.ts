@@ -51,6 +51,7 @@ import {
   formatOptionsXml,
 } from '@/gemini/utils/optionsParser';
 import { ConversationHistory } from '@/gemini/utils/conversationHistory';
+import { extractText, normalizeContent } from '@slopus/happy-wire';
 
 
 /**
@@ -262,7 +263,7 @@ export async function runGemini(opts: {
 
     // Build the full prompt with appendSystemPrompt if provided
     // Only include system prompt for the first message to avoid forcing tool usage on every message
-    const originalUserMessage = message.content.text;
+    const originalUserMessage = extractText(normalizeContent(message.content)) ?? '';
     let fullPrompt = originalUserMessage;
     if (isFirstMessage && message.meta?.appendSystemPrompt) {
       // Prepend system prompt to user message only for first message

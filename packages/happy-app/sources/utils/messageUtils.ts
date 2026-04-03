@@ -1,6 +1,7 @@
 import { type DecryptedMessage } from '@/sync/storageTypes';
 import { type ToolCall } from '@/sync/typesMessage';
 import { stringifyToolCommand } from './toolCommand';
+import { normalizeContent, extractTextOrEmpty } from '@slopus/happy-wire';
 
 /**
  * Extracts plain text from markdown by removing formatting
@@ -197,11 +198,15 @@ export function getMessagePreview(message: DecryptedMessage | null, maxLength: n
 
   // User messages
   if (content.role === 'user') {
-    if (content.content && content.content.type === 'text') {
-      const plainText = stripMarkdown(content.content.text);
-      return plainText.length > maxLength
-        ? plainText.substring(0, maxLength) + '...'
-        : plainText;
+    if (content.content) {
+      const blocks = normalizeContent(content.content);
+      const text = extractTextOrEmpty(blocks);
+      if (text) {
+        const plainText = stripMarkdown(text);
+        return plainText.length > maxLength
+          ? plainText.substring(0, maxLength) + '...'
+          : plainText;
+      }
     }
     return 'User message';
   }
@@ -210,16 +215,28 @@ export function getMessagePreview(message: DecryptedMessage | null, maxLength: n
   if (content.role === 'agent') {
     // FIRST: Check if this is the processed Message format (simple structure)
     // This handles: {role: 'agent', content: {type: 'text', text: '...'}}
+    // or new array format: {role: 'agent', content: ContentBlock[]}
     if (content.content && typeof content.content === 'object') {
-      if (content.content.type === 'text' && content.content.text) {
-        const plainText = stripMarkdown(content.content.text);
-        return plainText.length > maxLength
-          ? plainText.substring(0, maxLength) + '...'
-          : plainText;
-      }
-      
-      if (content.content.type === 'tool' && content.content.tools) {
-        return getToolSummary(content.content.tools);
+      if (Array.isArray(content.content)) {
+        // New array format: ContentBlock[]
+        const text = extractTextOrEmpty(content.content);
+        if (text) {
+          const plainText = stripMarkdown(text);
+          return plainText.length > maxLength
+            ? plainText.substring(0, maxLength) + '...'
+            : plainText;
+        }
+      } else {
+        if (content.content.type === 'text' && content.content.text) {
+          const plainText = stripMarkdown(content.content.text);
+          return plainText.length > maxLength
+            ? plainText.substring(0, maxLength) + '...'
+            : plainText;
+        }
+
+        if (content.content.type === 'tool' && content.content.tools) {
+          return getToolSummary(content.content.tools);
+        }
       }
     }
     

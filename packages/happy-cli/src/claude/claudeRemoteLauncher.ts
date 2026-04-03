@@ -16,6 +16,7 @@ import { RawJSONLines } from "@/claude/types";
 import { OutgoingMessageQueue } from "./utils/OutgoingMessageQueue";
 import { getToolName } from "./utils/getToolName";
 import { getAskUserQuestionToolCallIds } from "./utils/questionNotification";
+import type { ContentBlock } from "@/api/types";
 
 interface PermissionsField {
     date: number;
@@ -315,6 +316,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
         let pending: {
             message: string;
             mode: EnhancedMode;
+            blocks?: ContentBlock[];
         } | null = null;
 
         // Track session ID to detect when it actually changes
@@ -371,7 +373,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                         if (msg) {
                             if ((modeHash && msg.hash !== modeHash) || msg.isolate) {
                                 logger.debug('[remote]: mode has changed, pending message');
-                                pending = msg;
+                                pending = { message: msg.message, mode: msg.mode, blocks: msg.blocks };
                                 return null;
                             }
                             modeHash = msg.hash;
@@ -379,7 +381,8 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                             permissionHandler.handleModeChange(mode.permissionMode);
                             return {
                                 message: msg.message,
-                                mode: msg.mode
+                                mode: msg.mode,
+                                blocks: msg.blocks
                             }
                         }
 

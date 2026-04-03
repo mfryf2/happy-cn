@@ -17,6 +17,7 @@ import { ApiClient } from '@/api/api';
 import type { ApiSessionClient } from '@/api/apiSession';
 import { AcpSessionManager } from '@/agent/acp/AcpSessionManager';
 import type { SessionEnvelope } from '@slopus/happy-wire';
+import { extractText, extractTextOrEmpty, normalizeContent } from '@slopus/happy-wire';
 import { logger } from '@/ui/logger';
 import { MessageQueue2 } from '@/utils/MessageQueue2';
 import { Credentials, readSettings } from '@/persistence';
@@ -262,8 +263,8 @@ export async function runOpenClaw(opts: RunOpenClawOptions): Promise<void> {
   backend.onMessage(onBackendMessage);
 
   session.onUserMessage((message) => {
-    if (!message.content.text) return;
-    messageQueue.push(message.content.text, {});
+    if (!extractText(normalizeContent(message.content))) return;
+    messageQueue.push(extractTextOrEmpty(normalizeContent(message.content)), {});
   });
   session.keepAlive(thinking, 'remote');
 

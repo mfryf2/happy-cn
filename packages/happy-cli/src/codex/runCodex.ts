@@ -30,6 +30,7 @@ import type { ApiSessionClient } from '@/api/apiSession';
 import { resolveCodexExecutionPolicy } from './executionPolicy';
 import { mapCodexMcpMessageToSessionEnvelopes, mapCodexProcessorMessageToSessionEnvelopes } from './utils/sessionProtocolMapper';
 import { resumeExistingThread } from './resumeExistingThread';
+import { extractTextOrEmpty, normalizeContent } from '@slopus/happy-wire';
 
 type ReadyEventOptions = {
     pending: unknown;
@@ -192,7 +193,7 @@ export async function runCodex(opts: {
             permissionMode: messagePermissionMode || 'default',
             model: messageModel,
         };
-        messageQueue.push(message.content.text, enhancedMode);
+        messageQueue.push(extractTextOrEmpty(normalizeContent(message.content)), enhancedMode);
     });
     let thinking = false;
     let currentTurnId: string | null = null;

@@ -1,6 +1,7 @@
 import { EnhancedMode } from "./loop";
 import { query, type QueryOptions, type SDKMessage, type SDKSystemMessage, AbortError, SDKUserMessage } from '@/claude/sdk'
 import { mapToClaudeMode } from "./utils/permissionMode";
+import type { ContentBlock } from "@/api/types";
 import { claudeCheckSession } from "./utils/claudeCheckSession";
 import { join, resolve } from 'node:path';
 import { projectPath } from "@/projectPath";
@@ -12,6 +13,38 @@ import { awaitFileExist } from "@/modules/watcher/awaitFileExist";
 import { systemPrompt } from "./utils/systemPrompt";
 import { PermissionResult } from "./sdk/types";
 import type { JsRuntime } from "./runClaude";
+
+async function buildUserContent(message: string, blocks?: ContentBlock[]): Promise<string | Array<any>> {
+    if (!blocks || blocks.length === 0) {
+        return message;
+    }
+    const imageBlocks = blocks.filter(b => b.type === 'image_url');
+    if (imageBlocks.length === 0) {
+        return message;
+    }
+    const contentArray: Array<any> = [{ type: 'text', text: message }];
+    for (const block of imageBlocks) {
+        if (block.type === 'image_url') {
+            try {
+                const response = await fetch(block.url);
+                const arrayBuffer = await response.arrayBuffer();
+                const base64 = Buffer.from(arrayBuffer).toString('base64');
+                const contentType = response.headers.get('content-type') || 'image/jpeg';
+                contentArray.push({
+                    type: 'image',
+                    source: {
+                        type: 'base64',
+                        media_type: contentType,
+                        data: base64,
+                    }
+                });
+            } catch (e) {
+                logger.debug(`[claudeRemote] Failed to fetch image: ${(block as any).url}`, e);
+            }
+        }
+    }
+    return contentArray;
+}
 
 export async function claudeRemote(opts: {
 
@@ -30,7 +63,7 @@ export async function claudeRemote(opts: {
     jsRuntime?: JsRuntime,
 
     // Dynamic parameters
-    nextMessage: () => Promise<{ message: string, mode: EnhancedMode } | null>,
+    nextMessage: () => Promise<{ message: string, mode: EnhancedMode, blocks?: ContentBlock[] } | null>,
     onReady: () => void,
     isAborted: (toolCallId: string) => boolean,
 
@@ -147,11 +180,12 @@ export async function claudeRemote(opts: {
 
     // Push initial message
     let messages = new PushableAsyncIterable<SDKUserMessage>();
+    const initialContent = await buildUserContent(initial.message, initial.blocks);
     messages.push({
         type: 'user',
         message: {
             role: 'user',
-            content: initial.message,
+            content: initialContent,
         },
     });
 
@@ -213,7 +247,8 @@ export async function claudeRemote(opts: {
                     return;
                 }
                 mode = next.mode;
-                messages.push({ type: 'user', message: { role: 'user', content: next.message } });
+                const nextContent = await buildUserContent(next.message, next.blocks);
+                messages.push({ type: 'user', message: { role: 'user', content: nextContent } });
             }
 
             // Handle tool result

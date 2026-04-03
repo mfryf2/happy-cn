@@ -1,4 +1,5 @@
 import type { DecryptedMachine, DecryptedSession, DecryptedMessage } from './api';
+import { extractTextOrEmpty } from '@slopus/happy-wire';
 
 // --- Types ---
 
@@ -198,8 +199,10 @@ export function formatMessageHistory(messages: DecryptedMessage[]): string {
         const timestamp = formatIsoTime(msg.createdAt);
 
         let text: string;
-        if (content?.content && typeof content.content === 'object' && content.content.text) {
-            text = String(content.content.text);
+        if (content?.content && Array.isArray(content.content)) {
+            text = extractTextOrEmpty(content.content as import('@slopus/happy-wire').ContentBlock[]);
+        } else if (content?.content && typeof content.content === 'object' && !Array.isArray(content.content) && (content.content as { text?: string }).text) {
+            text = String((content.content as { text?: string }).text);
         } else if (content?.content && typeof content.content === 'string') {
             text = content.content;
         } else {

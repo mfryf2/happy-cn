@@ -7,6 +7,7 @@ import { AcpBackend, type AcpPermissionHandler } from './AcpBackend';
 import { DefaultTransport } from '@/agent/transport';
 import { AcpSessionManager } from './AcpSessionManager';
 import type { SessionEnvelope } from '@slopus/happy-wire';
+import { extractText, extractTextOrEmpty, normalizeContent } from '@slopus/happy-wire';
 import { logger } from '@/ui/logger';
 import { MessageQueue2 } from '@/utils/MessageQueue2';
 import { hashObject } from '@/utils/deterministicJson';
@@ -820,7 +821,7 @@ export async function runAcp(opts: {
   backend.onMessage(onBackendMessage);
 
   session.onUserMessage((message) => {
-    if (!message.content.text) {
+    if (!extractText(normalizeContent(message.content))) {
       return;
     }
 
@@ -834,7 +835,7 @@ export async function runAcp(opts: {
       logger.debug(`[${opts.agentName}] Requested ACP model: ${currentModel ?? 'null'}`);
     }
 
-    messageQueue.push(message.content.text, {
+    messageQueue.push(extractTextOrEmpty(normalizeContent(message.content)), {
       permissionMode: currentPermissionMode,
       model: currentModel,
     });

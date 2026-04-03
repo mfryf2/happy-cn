@@ -22,6 +22,10 @@ import { hackMode, hackModes } from '@/sync/modeHacks';
 import { Theme } from '@/theme';
 import { t } from '@/text';
 import { Metadata } from '@/sync/storageTypes';
+import * as ImagePicker from 'expo-image-picker';
+import { useHappyAction } from '@/hooks/useHappyAction';
+import { uploadImage } from '@/sync/apiUpload';
+import { TokenStorage } from '@/auth/tokenStorage';
 
 interface AgentInputProps {
     value: string;
@@ -73,6 +77,7 @@ interface AgentInputProps {
     isSendDisabled?: boolean;
     isSending?: boolean;
     minHeight?: number;
+    onSendWithImage?: (imageUrl: string, width: number, height: number) => void;
 }
 
 const MAX_CONTEXT_SIZE = 190000;
@@ -280,6 +285,37 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     sendButtonIcon: {
         color: theme.colors.button.primary.tint,
     },
+    pendingImageContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 8,
+        paddingTop: 8,
+        position: 'relative',
+    },
+    pendingImageRemove: {
+        position: 'absolute',
+        top: 4,
+        left: 56,
+        width: 20,
+        height: 20,
+        borderRadius: 10,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    pendingImageRemoveText: {
+        color: '#fff',
+        fontSize: 10,
+    },
+    imagePickerButton: {
+        width: 32,
+        height: 32,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    imagePickerIcon: {
+        fontSize: 20,
+    },
 }));
 
 const getContextWarning = (contextSize: number, alwaysShow: boolean = false, theme: Theme) => {
@@ -304,9 +340,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const isSendBlocked = props.blockSend ?? false;
 
     const hasText = props.value.trim().length > 0;
-    const canPressSendButton = !props.isSending
-        && !props.isSendDisabled
-        && (isSendBlocked ? hasText : (hasText || !!props.onMicPress));
 
     // Check if this is a Codex, Gemini, or OpenClaw session
     // Use metadata.flavor for existing sessions, agentType prop for new sessions
@@ -352,6 +385,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     const agentInputEnterToSend = useSetting('agentInputEnterToSend');
 
+
+    // Pending image state for image upload
+    const [pendingImage, setPendingImage] = React.useState<{
+        uri: string;
+        base64: string;
+        mimeType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
+        width: number;
+        height: number;
+    } | null>(null);
+
+    const canPressSendButton = !props.isSending
+        && !props.isSendDisabled
+        && (isSendBlocked ? hasText : (hasText || !!props.onMicPress || !!pendingImage));
 
     // Abort button state
     const [isAborting, setIsAborting] = React.useState(false);
@@ -474,12 +520,82 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         if (props.isSendDisabled || props.isSending) return;
 
         hapticsLight();
-        if (hasText) {
+        if (pendingImage && props.onSendWithImage) {
+            props.onSendWithImage(pendingImage.uri, pendingImage.width, pendingImage.height);
+            setPendingImage(null);
+        } else if (hasText) {
             props.onSend();
         } else {
             props.onMicPress?.();
         }
-    }, [handleBlockedSendAttempt, hasText, isSendBlocked, props]);
+    }, [handleBlockedSendAttempt, hasText, isSendBlocked, pendingImage, props]);
+
+    /**
+     * 处理图片选择按钮点击：打开图库 → 获取 base64 → 上传到服务器 → 存入 pendingImage 等待发送
+     */
+    const [isPickingImage, doPickImage] = useHappyAction(React.useCallback(async () => {
+        if (Platform.OS === 'web') {
+            await new Promise<void>((resolve) => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = 'image/jpeg,image/png,image/webp,image/gif';
+                input.onchange = async () => {
+                    const file = input.files?.[0];
+                    if (!file) { resolve(); return; }
+                    const reader = new FileReader();
+                    reader.onload = async () => {
+                        const dataUrl = reader.result as string;
+                        const base64 = dataUrl.split(',')[1];
+                        const rawMime = file.type || 'image/jpeg';
+                        const mimeType = (['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(rawMime)
+                            ? rawMime
+                            : 'image/jpeg') as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
+                        const credentials = await TokenStorage.getCredentials();
+                        if (!credentials) { resolve(); return; }
+                        const uploadResult = await uploadImage(credentials, base64, mimeType);
+                        setPendingImage({
+                            uri: uploadResult.url,
+                            base64,
+                            mimeType,
+                            width: uploadResult.width,
+                            height: uploadResult.height,
+                        });
+                        resolve();
+                    };
+                    reader.onerror = () => resolve();
+                    reader.readAsDataURL(file);
+                };
+                input.click();
+            });
+        } else {
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                allowsEditing: false,
+                quality: 0.85,
+                base64: true,
+            });
+            if (result.canceled || !result.assets || result.assets.length === 0) return;
+            const asset = result.assets[0];
+            if (!asset.base64) return;
+
+            const rawMime = asset.mimeType ?? 'image/jpeg';
+            const mimeType = (['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(rawMime)
+                ? rawMime
+                : 'image/jpeg') as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
+
+            const credentials = await TokenStorage.getCredentials();
+            if (!credentials) return;
+
+            const uploadResult = await uploadImage(credentials, asset.base64, mimeType);
+            setPendingImage({
+                uri: uploadResult.url,
+                base64: asset.base64,
+                mimeType,
+                width: uploadResult.width,
+                height: uploadResult.height,
+            });
+        }
+    }, []));
 
     // Handle keyboard navigation
     const handleKeyPress = React.useCallback((event: KeyPressEvent): boolean => {
@@ -962,6 +1078,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 {/* Box 2: Action Area (Input + Send) */}
                 <Shaker ref={sendBlockShakerRef}>
                 <View style={styles.unifiedPanel}>
+                    {/* Pending image preview */}
+                    {pendingImage && (
+                        <View style={styles.pendingImageContainer}>
+                            <Image
+                                source={{ uri: pendingImage.uri }}
+                                style={{ width: 64, height: 64, borderRadius: 8 }}
+                                contentFit="cover"
+                            />
+                            <Pressable style={styles.pendingImageRemove} onPress={() => setPendingImage(null)}>
+                                <Text style={styles.pendingImageRemoveText}>✕</Text>
+                            </Pressable>
+                        </View>
+                    )}
                     {/* Input field */}
                     <View style={[styles.inputContainer, props.minHeight ? { minHeight: props.minHeight } : undefined]}>
                         <MultiTextInput
@@ -1080,6 +1209,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                                 {/* Git Status Badge */}
                                 <GitStatusButton sessionId={props.sessionId} onPress={props.onFileViewerPress} />
+
+                                {/* Image picker button */}
+                                <Pressable
+                                    onPress={doPickImage}
+                                    disabled={isPickingImage}
+                                    style={styles.imagePickerButton}
+                                >
+                                    <Text style={styles.imagePickerIcon}>🖼️</Text>
+                                </Pressable>
                                 </View>
 
                                 {/* Send/Voice button - aligned with first row */}

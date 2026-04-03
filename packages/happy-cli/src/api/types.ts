@@ -218,12 +218,19 @@ export const CreateSessionResponseSchema = z.object({
 
 export type CreateSessionResponse = z.infer<typeof CreateSessionResponseSchema>
 
+export const ContentBlockSchema = z.union([
+  z.object({ type: z.literal('text'), text: z.string() }),
+  z.object({ type: z.literal('image_url'), url: z.string() }),
+])
+
+export type ContentBlock = z.infer<typeof ContentBlockSchema>
+
 export const UserMessageSchema = z.object({
   role: z.literal('user'),
-  content: z.object({
-    type: z.literal('text'),
-    text: z.string()
-  }),
+  content: z.union([
+    z.object({ type: z.literal('text'), text: z.string() }),
+    z.array(ContentBlockSchema),
+  ]),
   localKey: z.string().optional(), // Mobile messages include this
   meta: MessageMetaSchema.optional()
 })

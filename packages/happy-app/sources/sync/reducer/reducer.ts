@@ -116,6 +116,7 @@ import { createTracer, traceMessages, TracerState } from "./reducerTracer";
 import { AgentState } from "../storageTypes";
 import { MessageMeta } from "../typesMessageMeta";
 import { parseMessageAsEvent } from "./messageToEvent";
+import { normalizeContent, extractTextOrEmpty } from '@slopus/happy-wire';
 
 type ReducerMessage = {
     id: string;
@@ -657,7 +658,7 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
                 realID: msg.id,
                 role: 'user',
                 createdAt: msg.createdAt,
-                text: msg.content.text,
+                text: extractTextOrEmpty(normalizeContent(msg.content)),
                 tool: null,
                 event: null,
                 meta: msg.meta,
