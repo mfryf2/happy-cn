@@ -26,6 +26,8 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
     const [loadingButton, setLoadingButton] = useState<'allow' | 'deny' | 'abort' | null>(null);
     const [loadingAllEdits, setLoadingAllEdits] = useState(false);
     const [loadingForSession, setLoadingForSession] = useState(false);
+    // Track which button the user clicked — server never returns allowedTools so we can't rely on it
+    const [selectedAction, setSelectedAction] = useState<'allow' | 'allEdits' | 'forSession' | 'deny' | 'codexApprove' | 'codexForSession' | 'codexAbort' | null>(null);
     
     // Check if this is a Codex session - check both metadata.flavor and tool name prefix
     const isCodex = metadata?.flavor === 'codex' || toolName.startsWith('Codex');
@@ -34,10 +36,12 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
         if (permission.status !== 'pending' || loadingButton !== null || loadingAllEdits || loadingForSession) return;
 
         setLoadingButton('allow');
+        setSelectedAction('allow');
         try {
             await sessionAllow(sessionId, permission.id);
         } catch (error) {
             console.error('Failed to approve permission:', error);
+            setSelectedAction(null);
         } finally {
             setLoadingButton(null);
         }
@@ -47,12 +51,14 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
         if (permission.status !== 'pending' || loadingButton !== null || loadingAllEdits || loadingForSession) return;
 
         setLoadingAllEdits(true);
+        setSelectedAction('allEdits');
         try {
             await sessionAllow(sessionId, permission.id, 'acceptEdits');
             // Update the session permission mode to 'acceptEdits' for future permissions
             storage.getState().updateSessionPermissionMode(sessionId, 'acceptEdits');
         } catch (error) {
             console.error('Failed to approve all edits:', error);
+            setSelectedAction(null);
         } finally {
             setLoadingAllEdits(false);
         }
@@ -62,6 +68,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
         if (permission.status !== 'pending' || loadingButton !== null || loadingAllEdits || loadingForSession || !toolName) return;
 
         setLoadingForSession(true);
+        setSelectedAction('forSession');
         try {
             // Special handling for Bash tool - include exact command
             let toolIdentifier = toolName;
@@ -69,10 +76,11 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
                 const command = toolInput.command;
                 toolIdentifier = `Bash(${command})`;
             }
-            
+
             await sessionAllow(sessionId, permission.id, undefined, [toolIdentifier]);
         } catch (error) {
             console.error('Failed to approve for session:', error);
+            setSelectedAction(null);
         } finally {
             setLoadingForSession(false);
         }
@@ -82,10 +90,12 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
         if (permission.status !== 'pending' || loadingButton !== null || loadingAllEdits || loadingForSession) return;
 
         setLoadingButton('deny');
+        setSelectedAction('deny');
         try {
             await sessionDeny(sessionId, permission.id);
         } catch (error) {
             console.error('Failed to deny permission:', error);
+            setSelectedAction(null);
         } finally {
             setLoadingButton(null);
         }
@@ -94,38 +104,44 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
     // Codex-specific handlers
     const handleCodexApprove = async () => {
         if (permission.status !== 'pending' || loadingButton !== null || loadingForSession) return;
-        
+
         setLoadingButton('allow');
+        setSelectedAction('codexApprove');
         try {
             await sessionAllow(sessionId, permission.id, undefined, undefined, 'approved');
         } catch (error) {
             console.error('Failed to approve permission:', error);
+            setSelectedAction(null);
         } finally {
             setLoadingButton(null);
         }
     };
-    
+
     const handleCodexApproveForSession = async () => {
         if (permission.status !== 'pending' || loadingButton !== null || loadingForSession) return;
-        
+
         setLoadingForSession(true);
+        setSelectedAction('codexForSession');
         try {
             await sessionAllow(sessionId, permission.id, undefined, undefined, 'approved_for_session');
         } catch (error) {
             console.error('Failed to approve for session:', error);
+            setSelectedAction(null);
         } finally {
             setLoadingForSession(false);
         }
     };
-    
+
     const handleCodexAbort = async () => {
         if (permission.status !== 'pending' || loadingButton !== null || loadingForSession) return;
-        
+
         setLoadingButton('abort');
+        setSelectedAction('codexAbort');
         try {
             await sessionDeny(sessionId, permission.id, undefined, undefined, 'abort');
         } catch (error) {
             console.error('Failed to abort permission:', error);
+            setSelectedAction(null);
         } finally {
             setLoadingButton(null);
         }
@@ -151,15 +167,35 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
         return false;
     };
 
-    // Detect which button was used based on mode (for Claude) or decision (for Codex)
-    const isApprovedViaAllow = isApproved && permission.mode !== 'acceptEdits' && !isToolAllowed(toolName, toolInput, permission.allowedTools);
-    const isApprovedViaAllEdits = isApproved && permission.mode === 'acceptEdits';
-    const isApprovedForSession = isApproved && isToolAllowed(toolName, toolInput, permission.allowedTools);
-    
-    // Codex-specific status detection with fallback
-    const isCodexApproved = isCodex && isApproved && (permission.decision === 'approved' || !permission.decision);
-    const isCodexApprovedForSession = isCodex && isApproved && permission.decision === 'approved_for_session';
-    const isCodexAborted = isCodex && isDenied && permission.decision === 'abort';
+    // Detect which button was used.
+    // For Claude: use local selectedAction (server never returns allowedTools so we can't rely on permission.allowedTools).
+    // Fall back to server fields only when selectedAction is null (e.g. permissions loaded from history).
+    const isApprovedViaAllow = isApproved && (
+        selectedAction === 'allow' ||
+        (selectedAction === null && permission.mode !== 'acceptEdits' && !isToolAllowed(toolName, toolInput, permission.allowedTools))
+    );
+    const isApprovedViaAllEdits = isApproved && (
+        selectedAction === 'allEdits' ||
+        (selectedAction === null && permission.mode === 'acceptEdits')
+    );
+    const isApprovedForSession = isApproved && (
+        selectedAction === 'forSession' ||
+        (selectedAction === null && isToolAllowed(toolName, toolInput, permission.allowedTools))
+    );
+
+    // Codex-specific status detection — use selectedAction first, fall back to decision field
+    const isCodexApproved = isCodex && isApproved && (
+        selectedAction === 'codexApprove' ||
+        (selectedAction === null && (permission.decision === 'approved' || !permission.decision))
+    );
+    const isCodexApprovedForSession = isCodex && isApproved && (
+        selectedAction === 'codexForSession' ||
+        (selectedAction === null && permission.decision === 'approved_for_session')
+    );
+    const isCodexAborted = isCodex && isDenied && (
+        selectedAction === 'codexAbort' ||
+        (selectedAction === null && permission.decision === 'abort')
+    );
 
     const styles = StyleSheet.create({
         container: {
