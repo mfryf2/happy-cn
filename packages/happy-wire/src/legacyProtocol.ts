@@ -10,7 +10,10 @@ export type TextBlock = z.infer<typeof TextBlockSchema>;
 
 export const ImageUrlBlockSchema = z.object({
     type: z.literal('image_url'),
-    url: z.string().url(),
+    url: z.string(),
+    text: z.string().optional(),
+    width: z.number().optional(),
+    height: z.number().optional(),
 });
 export type ImageUrlBlock = z.infer<typeof ImageUrlBlockSchema>;
 
@@ -52,11 +55,18 @@ export type LegacyMessageContent = z.infer<typeof LegacyMessageContentSchema>;
  */
 export function normalizeContent(content: unknown): ContentBlock[] {
     if (Array.isArray(content)) {
-        return z.array(ContentBlockSchema).parse(content);
+        const result = z.array(ContentBlockSchema).safeParse(content);
+        if (result.success) return result.data;
+        // Fallback: filter block-by-block, skip invalid ones
+        return (content as unknown[])
+            .map(b => ContentBlockSchema.safeParse(b))
+            .filter((r): r is { success: true; data: ContentBlock } => r.success)
+            .map(r => r.data);
     }
     // Legacy single object
-    const legacy = LegacyContentObjectSchema.parse(content);
-    return [{ type: 'text', text: legacy.text }];
+    const legacy = LegacyContentObjectSchema.safeParse(content);
+    if (!legacy.success) return [];
+    return [{ type: 'text', text: legacy.data.text }];
 }
 
 /**

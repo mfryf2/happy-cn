@@ -517,6 +517,95 @@ class Sync {
         this.maybeStartBackgroundSendWatchdog();
     }
 
+    async sendMessageWithImages(sessionId: string, images: Array<{ url: string; width: number; height: number }>, text?: string) {
+
+        // Get encryption
+        const encryption = this.encryption.getSessionEncryption(sessionId);
+        if (!encryption) {
+            console.error(`Session ${sessionId} not found`);
+            return;
+        }
+
+        // Get session data from storage
+        const session = storage.getState().sessions[sessionId];
+        if (!session) {
+            console.error(`Session ${sessionId} not found in storage`);
+            return;
+        }
+
+        const { permissionMode, model } = resolveMessageModeMeta(session);
+
+        // Determine sentFrom based on platform
+        let sentFrom: string;
+        if (Platform.OS === 'web') {
+            sentFrom = 'web';
+        } else if (Platform.OS === 'android') {
+            sentFrom = 'android';
+        } else if (Platform.OS === 'ios') {
+            if (isRunningOnMac()) {
+                sentFrom = 'mac';
+            } else {
+                sentFrom = 'ios';
+            }
+        } else {
+            sentFrom = 'web';
+        }
+
+        const localId = randomUUID();
+        const fallbackModel: string | null = null;
+
+        // Create ContentBlock array with text and image blocks
+        const contentBlocks: Array<{ type: 'text'; text: string } | { type: 'image_url'; url: string; width?: number; height?: number }> = [];
+
+        if (text?.trim()) {
+            contentBlocks.push({
+                type: 'text',
+                text: text,
+            });
+        }
+
+        for (const img of images) {
+            contentBlocks.push({
+                type: 'image_url',
+                url: img.url,
+                width: img.width,
+                height: img.height,
+            });
+        }
+
+        const content: RawRecord = {
+            role: 'user',
+            content: contentBlocks,
+            meta: {
+                sentFrom,
+                permissionMode,
+                model,
+                fallbackModel,
+                appendSystemPrompt: null,
+            }
+        };
+        const encryptedRawRecord = await encryption.encryptRawRecord(content);
+
+        const createdAt = Date.now();
+        const normalizedMessage = normalizeRawMessage(localId, localId, createdAt, content);
+        if (normalizedMessage) {
+            this.enqueueMessages(sessionId, [normalizedMessage]);
+        }
+
+        let pending = this.pendingOutbox.get(sessionId);
+        if (!pending) {
+            pending = [];
+            this.pendingOutbox.set(sessionId, pending);
+        }
+        pending.push({
+            localId,
+            content: encryptedRawRecord
+        });
+
+        this.getSendSync(sessionId).invalidate();
+        this.maybeStartBackgroundSendWatchdog();
+    }
+
     applySettings = (delta: Partial<Settings>) => {
         storage.getState().applySettingsLocal(delta);
 

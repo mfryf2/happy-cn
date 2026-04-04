@@ -431,10 +431,32 @@ const rawRecordSchema = z.preprocess(
         }),
         z.object({
             role: z.literal('user'),
-            content: z.object({
-                type: z.literal('text'),
-                text: z.string()
-            }),
+            content: z.union([
+                z.object({
+                    type: z.literal('text'),
+                    text: z.string()
+                }),
+                z.object({
+                    type: z.literal('image_url'),
+                    url: z.string(),
+                    text: z.string().optional(),
+                    width: z.number().optional(),
+                    height: z.number().optional(),
+                }),
+                z.array(z.union([
+                    z.object({
+                        type: z.literal('text'),
+                        text: z.string()
+                    }),
+                    z.object({
+                        type: z.literal('image_url'),
+                        url: z.string(),
+                        text: z.string().optional(),
+                        width: z.number().optional(),
+                        height: z.number().optional(),
+                    }),
+                ])),
+            ]),
             meta: MessageMetaSchema.optional()
         }),
         z.object({
@@ -500,12 +522,20 @@ type NormalizedAgentContent =
         prompt: string
     };
 
+export type NormalizedUserContentItem = {
+    type: 'text';
+    text: string;
+} | {
+    type: 'image_url';
+    url: string;
+    text?: string;
+    width?: number;
+    height?: number;
+};
+
 export type NormalizedMessage = ({
     role: 'user'
-    content: {
-        type: 'text';
-        text: string;
-    }
+    content: NormalizedUserContentItem | NormalizedUserContentItem[]
 } | {
     role: 'agent'
     content: NormalizedAgentContent[]

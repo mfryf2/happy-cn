@@ -21,6 +21,11 @@ export type ToolCall = {
     };
 }
 
+// Content block types for user messages with mixed content (text + images)
+export type ContentBlock = 
+    | { type: 'text'; text: string }
+    | { type: 'image_url'; url: string; text?: string; width?: number; height?: number };
+
 // Flattened message types - each message represents a single block
 export type UserTextMessage = {
     kind: 'user-text';
@@ -30,6 +35,10 @@ export type UserTextMessage = {
     text: string;
     displayText?: string; // Optional text to display in UI instead of actual text
     meta?: MessageMeta;
+    // Content blocks for mixed content (text + images)
+    // When present, this contains all the content blocks sent by the user
+    // including both text and image_url blocks
+    content?: ContentBlock | ContentBlock[];
 }
 
 export type ModeSwitchMessage = {

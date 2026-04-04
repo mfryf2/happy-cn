@@ -350,7 +350,8 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
                 allowedTools: messageAllowedTools,
                 disallowedTools: messageDisallowedTools
             };
-            messageQueue.pushIsolateAndClear(specialCommand.originalMessage || extractTextOrEmpty(normalizeContent(message.content)), enhancedMode);
+            const blocks = Array.isArray(message.content) ? message.content : undefined;
+            messageQueue.pushIsolateAndClear(specialCommand.originalMessage || extractTextOrEmpty(normalizeContent(message.content)), enhancedMode, blocks);
             logger.debugLargeJson('[start] /compact command pushed to queue:', message);
             return;
         }
@@ -366,7 +367,8 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
                 allowedTools: messageAllowedTools,
                 disallowedTools: messageDisallowedTools
             };
-            messageQueue.pushIsolateAndClear(specialCommand.originalMessage || extractTextOrEmpty(normalizeContent(message.content)), enhancedMode);
+            const blocks = Array.isArray(message.content) ? message.content : undefined;
+            messageQueue.pushIsolateAndClear(specialCommand.originalMessage || extractTextOrEmpty(normalizeContent(message.content)), enhancedMode, blocks);
             logger.debugLargeJson('[start] /compact command pushed to queue:', message);
             return;
         }
@@ -381,7 +383,9 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             allowedTools: messageAllowedTools,
             disallowedTools: messageDisallowedTools
         };
-        messageQueue.push(extractTextOrEmpty(normalizeContent(message.content)), enhancedMode);
+        const text = extractTextOrEmpty(normalizeContent(message.content));
+        const blocks = Array.isArray(message.content) ? message.content : undefined;
+        messageQueue.push(text, enhancedMode, blocks);
         logger.debugLargeJson('User message pushed to queue:', message)
     });
 

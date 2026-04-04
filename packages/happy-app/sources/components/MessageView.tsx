@@ -1,9 +1,10 @@
 import * as React from "react";
-import { View, Text } from "react-native";
+import { View, Text, TouchableOpacity, Modal, Pressable, useWindowDimensions } from "react-native";
+import { Image } from "expo-image";
 import { StyleSheet } from 'react-native-unistyles';
 import { MarkdownView } from "./markdown/MarkdownView";
 import { t } from '@/text';
-import { Message, UserTextMessage, AgentTextMessage, ToolCallMessage } from "@/sync/typesMessage";
+import { Message, UserTextMessage, AgentTextMessage, ToolCallMessage, ContentBlock } from "@/sync/typesMessage";
 import { Metadata } from "@/sync/storageTypes";
 import { layout } from "./layout";
 import { ToolView } from "./tools/ToolView";
@@ -65,6 +66,25 @@ function RenderBlock(props: {
   }
 }
 
+// Helper function to extract text blocks from content
+function getTextFromContent(content: ContentBlock | ContentBlock[] | undefined): string | null {
+  if (!content) return null;
+  
+  const blocks = Array.isArray(content) ? content : [content];
+  const textBlocks = blocks.filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text');
+  
+  if (textBlocks.length === 0) return null;
+  return textBlocks.map(b => b.text).join('\n');
+}
+
+// Helper function to extract image blocks from content
+function getImagesFromContent(content: ContentBlock | ContentBlock[] | undefined): Array<Extract<ContentBlock, { type: 'image_url' }>> {
+  if (!content) return [];
+  
+  const blocks = Array.isArray(content) ? content : [content];
+  return blocks.filter((b): b is Extract<ContentBlock, { type: 'image_url' }> => b.type === 'image_url');
+}
+
 function UserTextBlock(props: {
   message: UserTextMessage;
   sessionId: string;
@@ -73,14 +93,67 @@ function UserTextBlock(props: {
     sync.sendMessage(props.sessionId, option.title);
   }, [props.sessionId]);
 
+  const [lightboxUrl, setLightboxUrl] = React.useState<string | null>(null);
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+
+  // Extract content from content blocks if available
+  const contentBlockImages = getImagesFromContent(props.message.content);
+  const contentBlockText = getTextFromContent(props.message.content);
+
+  // Determine what text to display
+  const displayText = props.message.displayText || contentBlockText || props.message.text;
+
   return (
     <View style={styles.userMessageContainer}>
-      <View style={styles.userMessageBubble}>
-        <MarkdownView markdown={props.message.displayText || props.message.text} onOptionPress={handleOptionPress} sessionId={props.sessionId} />
-        {/* {__DEV__ && (
-          <Text style={styles.debugText}>{JSON.stringify(props.message.meta)}</Text>
-        )} */}
-      </View>
+      {/* Images displayed above the text bubble */}
+      {contentBlockImages.length > 0 && (
+        <View style={styles.imageGallery}>
+          {contentBlockImages.map((imageBlock, index) => {
+              const imgSize = 100;
+              return (
+                <TouchableOpacity
+                  key={index}
+                  style={styles.imageWrapper}
+                  onPress={() => setLightboxUrl(imageBlock.url)}
+                  activeOpacity={0.85}
+                >
+                  <Image
+                    source={{ uri: imageBlock.url }}
+                    style={{ width: imgSize, height: imgSize }}
+                    contentFit="cover"
+                  />
+                </TouchableOpacity>
+              );
+            })}
+        </View>
+      )}
+
+      {/* Text bubble */}
+      {displayText && (
+        <View style={styles.userMessageBubble}>
+          <MarkdownView
+            markdown={displayText}
+            onOptionPress={handleOptionPress}
+            sessionId={props.sessionId}
+          />
+        </View>
+      )}
+
+      {/* Lightbox modal */}
+      <Modal
+        visible={lightboxUrl !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setLightboxUrl(null)}
+      >
+        <Pressable style={styles.lightboxOverlay} onPress={() => setLightboxUrl(null)}>
+          <Image
+            source={{ uri: lightboxUrl ?? undefined }}
+            style={{ width: screenWidth, height: screenHeight }}
+            contentFit="contain"
+          />
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -195,6 +268,24 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: 12,
     marginBottom: 12,
     maxWidth: '100%',
+  },
+  imageGallery: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 6,
+    alignItems: 'flex-end',
+    justifyContent: 'flex-end',
+  },
+  imageWrapper: {
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  lightboxOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   agentMessageContainer: {
     marginHorizontal: 16,

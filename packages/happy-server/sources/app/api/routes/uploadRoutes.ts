@@ -19,7 +19,7 @@ const ALLOWED_MIME: Record<string, string> = {
 
 /**
  * 图片上传路由
- * POST /v3/upload/image — 接收 base64 编码的图片，剥除 EXIF 元数据后上传到存储并返回公共 URL。
+ * POST /v3/upload/image — 接收 base64 编码的图片，剥除所有元数据（EXIF / IPTC / XMP）后上传到存储并返回公共 URL。
  * 客户端负责 E2E 加密消息体中写入该 URL；CLI 通过 URL 下载图片后转 base64 传给 Claude SDK。
  */
 export function uploadRoutes(app: Fastify) {
@@ -60,12 +60,13 @@ export function uploadRoutes(app: Fastify) {
             return reply.code(400).send({ error: `Image too large: max ${MAX_IMAGE_BYTES / 1024 / 1024}MB` });
         }
 
-        // 使用 sharp 剥除 EXIF 元数据并获取尺寸
+        // 使用 sharp 剥除所有元数据（EXIF / IPTC / XMP）并获取尺寸
+        // sharp() 默认行为：不调用 .withMetadata() 时会剥除全部元数据
         let processedBuffer: Buffer;
         let width: number;
         let height: number;
         try {
-            const image = sharp(imageBuffer).withMetadata({ exif: {} });
+            const image = sharp(imageBuffer);
             const metadata = await sharp(imageBuffer).metadata();
             width = metadata.width ?? 0;
             height = metadata.height ?? 0;

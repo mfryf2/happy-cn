@@ -77,7 +77,7 @@ interface AgentInputProps {
     isSendDisabled?: boolean;
     isSending?: boolean;
     minHeight?: number;
-    onSendWithImage?: (imageUrl: string, width: number, height: number) => void;
+    onSendWithImages?: (images: Array<{ uri: string; width: number; height: number }>, text?: string) => void;
 }
 
 const MAX_CONTEXT_SIZE = 190000;
@@ -386,18 +386,16 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const agentInputEnterToSend = useSetting('agentInputEnterToSend');
 
 
-    // Pending image state for image upload
-    const [pendingImage, setPendingImage] = React.useState<{
+    // Pending images state for image upload (supports multiple images)
+    const [pendingImages, setPendingImages] = React.useState<Array<{
         uri: string;
-        base64: string;
-        mimeType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
         width: number;
         height: number;
-    } | null>(null);
+    }>>([]);
 
     const canPressSendButton = !props.isSending
         && !props.isSendDisabled
-        && (isSendBlocked ? hasText : (hasText || !!props.onMicPress || !!pendingImage));
+        && (isSendBlocked ? hasText : (hasText || !!props.onMicPress || pendingImages.length > 0));
 
     // Abort button state
     const [isAborting, setIsAborting] = React.useState(false);
@@ -520,18 +518,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         if (props.isSendDisabled || props.isSending) return;
 
         hapticsLight();
-        if (pendingImage && props.onSendWithImage) {
-            props.onSendWithImage(pendingImage.uri, pendingImage.width, pendingImage.height);
-            setPendingImage(null);
+        if (pendingImages.length > 0 && props.onSendWithImages) {
+            // Send all pending images together with optional text
+            props.onSendWithImages(pendingImages, props.value.trim() || undefined);
+            setPendingImages([]);
         } else if (hasText) {
             props.onSend();
         } else {
             props.onMicPress?.();
         }
-    }, [handleBlockedSendAttempt, hasText, isSendBlocked, pendingImage, props]);
+    }, [handleBlockedSendAttempt, hasText, isSendBlocked, pendingImages, props]);
 
     /**
-     * 处理图片选择按钮点击：打开图库 → 获取 base64 → 上传到服务器 → 存入 pendingImage 等待发送
+     * 处理图片选择按钮点击：打开图库 → 获取 base64 → 上传到服务器 → 追加到 pendingImages
      */
     const [isPickingImage, doPickImage] = useHappyAction(React.useCallback(async () => {
         if (Platform.OS === 'web') {
@@ -539,30 +538,49 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 const input = document.createElement('input');
                 input.type = 'file';
                 input.accept = 'image/jpeg,image/png,image/webp,image/gif';
+
+                // Handle cancel: listen for window focus after input is created
+                let resolved = false;
+                const onFocus = () => {
+                    // Small delay to let onchange fire first if user selected a file
+                    setTimeout(() => {
+                        if (!resolved) {
+                            resolved = true;
+                            resolve();
+                        }
+                        window.removeEventListener('focus', onFocus);
+                    }, 300);
+                };
+                window.addEventListener('focus', onFocus);
+
                 input.onchange = async () => {
                     const file = input.files?.[0];
-                    if (!file) { resolve(); return; }
+                    if (!file) {
+                        if (!resolved) { resolved = true; resolve(); }
+                        return;
+                    }
                     const reader = new FileReader();
                     reader.onload = async () => {
-                        const dataUrl = reader.result as string;
-                        const base64 = dataUrl.split(',')[1];
-                        const rawMime = file.type || 'image/jpeg';
-                        const mimeType = (['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(rawMime)
-                            ? rawMime
-                            : 'image/jpeg') as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
-                        const credentials = await TokenStorage.getCredentials();
-                        if (!credentials) { resolve(); return; }
-                        const uploadResult = await uploadImage(credentials, base64, mimeType);
-                        setPendingImage({
-                            uri: uploadResult.url,
-                            base64,
-                            mimeType,
-                            width: uploadResult.width,
-                            height: uploadResult.height,
-                        });
-                        resolve();
+                        try {
+                            const dataUrl = reader.result as string;
+                            const base64 = dataUrl.split(',')[1];
+                            const rawMime = file.type || 'image/jpeg';
+                            const mimeType = (['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(rawMime)
+                                ? rawMime
+                                : 'image/jpeg') as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
+                            const credentials = await TokenStorage.getCredentials();
+                            if (!credentials) { if (!resolved) { resolved = true; resolve(); } return; }
+                            const uploadResult = await uploadImage(credentials, base64, mimeType);
+                            setPendingImages(prev => [...prev, {
+                                uri: uploadResult.url,
+                                width: uploadResult.width,
+                                height: uploadResult.height,
+                            }]);
+                        } finally {
+                            if (!resolved) { resolved = true; resolve(); }
+                        }
                     };
-                    reader.onerror = () => resolve();
+                    reader.onerror = () => { if (!resolved) { resolved = true; resolve(); } };
                     reader.readAsDataURL(file);
                 };
                 input.click();
@@ -587,13 +605,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             if (!credentials) return;
 
             const uploadResult = await uploadImage(credentials, asset.base64, mimeType);
-            setPendingImage({
+            setPendingImages(prev => [...prev, {
                 uri: uploadResult.url,
-                base64: asset.base64,
-                mimeType,
                 width: uploadResult.width,
                 height: uploadResult.height,
-            });
+            }]);
         }
     }, []));
 
@@ -638,11 +654,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             // there's no Shift key available. Users send via the send button instead.
             const isTouchDevice = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
             if (agentInputEnterToSend && event.key === 'Enter' && !event.shiftKey && !isTouchDevice) {
-                if (props.value.trim()) {
+                if (props.value.trim() || pendingImages.length > 0) {
                     if (isSendBlocked) {
                         handleBlockedSendAttempt();
                     } else if (!props.isSendDisabled) {
-                        props.onSend();
+                        handleSendPress();
                     }
                     return true; // Key was handled
                 }
@@ -658,7 +674,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
         }
         return false; // Key was not handled
-    }, [suggestions, moveUp, moveDown, selected, handleSuggestionSelect, props.showAbortButton, props.onAbort, isAborting, handleAbortPress, agentInputEnterToSend, props.value, props.onSend, props.onPermissionModeChange, availableModes, permissionModeKey, isSendBlocked, handleBlockedSendAttempt, props.isSendDisabled]);
+    }, [suggestions, moveUp, moveDown, selected, handleSuggestionSelect, props.showAbortButton, props.onAbort, isAborting, handleAbortPress, agentInputEnterToSend, props.value, props.onSend, props.onPermissionModeChange, availableModes, permissionModeKey, isSendBlocked, handleBlockedSendAttempt, props.isSendDisabled, pendingImages, handleSendPress]);
 
 
 
@@ -1078,16 +1094,56 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 {/* Box 2: Action Area (Input + Send) */}
                 <Shaker ref={sendBlockShakerRef}>
                 <View style={styles.unifiedPanel}>
-                    {/* Pending image preview */}
-                    {pendingImage && (
-                        <View style={styles.pendingImageContainer}>
-                            <Image
-                                source={{ uri: pendingImage.uri }}
-                                style={{ width: 64, height: 64, borderRadius: 8 }}
-                                contentFit="cover"
-                            />
-                            <Pressable style={styles.pendingImageRemove} onPress={() => setPendingImage(null)}>
-                                <Text style={styles.pendingImageRemoveText}>✕</Text>
+                    {/* Pending images preview - horizontal scroll with + button */}
+                    {pendingImages.length > 0 && (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingTop: 8, gap: 8, flexWrap: 'wrap' }}>
+                            {pendingImages.map((img, index) => (
+                                <View key={index} style={{ position: 'relative' }}>
+                                    <Image
+                                        source={{ uri: img.uri }}
+                                        style={{ width: 64, height: 64, borderRadius: 8 }}
+                                        contentFit="cover"
+                                    />
+                                    <Pressable
+                                        style={{
+                                            position: 'absolute',
+                                            top: -6,
+                                            right: -6,
+                                            width: 20,
+                                            height: 20,
+                                            borderRadius: 10,
+                                            backgroundColor: 'rgba(0,0,0,0.6)',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                        }}
+                                        onPress={() => setPendingImages(prev => prev.filter((_, i) => i !== index))}
+                                    >
+                                        <Text style={{ color: '#fff', fontSize: 10, lineHeight: 12 }}>✕</Text>
+                                    </Pressable>
+                                </View>
+                            ))}
+                            {/* Add more images button */}
+                            <Pressable
+                                onPress={doPickImage}
+                                disabled={isPickingImage}
+                                style={(p) => ({
+                                    width: 64,
+                                    height: 64,
+                                    borderRadius: 8,
+                                    borderWidth: 1.5,
+                                    borderColor: theme.colors.divider,
+                                    borderStyle: 'dashed',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    opacity: p.pressed || isPickingImage ? 0.5 : 1,
+                                    backgroundColor: theme.colors.surfacePressed,
+                                })}
+                            >
+                                {isPickingImage ? (
+                                    <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                                ) : (
+                                    <Ionicons name="add" size={24} color={theme.colors.textSecondary} />
+                                )}
                             </Pressable>
                         </View>
                     )}
@@ -1210,14 +1266,23 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 {/* Git Status Badge */}
                                 <GitStatusButton sessionId={props.sessionId} onPress={props.onFileViewerPress} />
 
-                                {/* Image picker button */}
+                                {/* Image picker button - only show when no images pending */}
+                                {pendingImages.length === 0 && (
                                 <Pressable
                                     onPress={doPickImage}
                                     disabled={isPickingImage}
-                                    style={styles.imagePickerButton}
+                                    style={(p) => ({
+                                        ...styles.imagePickerButton,
+                                        opacity: p.pressed || isPickingImage ? 0.5 : 1,
+                                    })}
                                 >
-                                    <Text style={styles.imagePickerIcon}>🖼️</Text>
+                                    {isPickingImage ? (
+                                        <ActivityIndicator size="small" color={theme.colors.button.secondary.tint} />
+                                    ) : (
+                                        <Ionicons name="image-outline" size={20} color={theme.colors.button.secondary.tint} />
+                                    )}
                                 </Pressable>
+                                )}
                                 </View>
 
                                 {/* Send/Voice button - aligned with first row */}
@@ -1239,7 +1304,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                             opacity: p.pressed ? 0.7 : 1,
                                         })}
                                         hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
-                                        onPress={handleSendPress}
+                                        onPress={() => {
+                                            handleSendPress();
+                                        }}
                                         disabled={!canPressSendButton}
                                     >
                                         {props.isSending ? (

@@ -110,7 +110,7 @@
  * - Updated internal state for future processing
  */
 
-import { Message, ToolCall } from "../typesMessage";
+import { Message, ToolCall, ContentBlock } from "../typesMessage";
 import { AgentEvent, NormalizedMessage, UsageData } from "../typesRaw";
 import { createTracer, traceMessages, TracerState } from "./reducerTracer";
 import { AgentState } from "../storageTypes";
@@ -128,6 +128,7 @@ type ReducerMessage = {
     event: AgentEvent | null;
     tool: ToolCall | null;
     meta?: MessageMeta;
+    content?: ContentBlock | ContentBlock[];
 }
 
 type StoredPermission = {
@@ -662,6 +663,7 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
                 tool: null,
                 event: null,
                 meta: msg.meta,
+                ...(msg.content && { content: msg.content }),
             });
 
             // Track both localId and messageId
@@ -1171,15 +1173,17 @@ function processUsageData(state: ReducerState, usage: UsageData, timestamp: numb
 
 function convertReducerMessageToMessage(reducerMsg: ReducerMessage, state: ReducerState): Message | null {
     if (reducerMsg.role === 'user' && reducerMsg.text !== null) {
-        return {
+        const msg = {
             id: reducerMsg.id,
             localId: null,
             createdAt: reducerMsg.createdAt,
-            kind: 'user-text',
+            kind: 'user-text' as const,
             text: reducerMsg.text,
             ...(reducerMsg.meta?.displayText && { displayText: reducerMsg.meta.displayText }),
+            ...(reducerMsg.content && { content: reducerMsg.content }),
             meta: reducerMsg.meta
         };
+        return msg;
     } else if (reducerMsg.role === 'agent' && reducerMsg.text !== null) {
         return {
             id: reducerMsg.id,

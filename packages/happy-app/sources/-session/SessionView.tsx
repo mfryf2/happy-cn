@@ -363,6 +363,15 @@ function SessionViewLoaded({ sessionId, session }: { sessionId: string, session:
                     trackMessageSent();
                 }
             }}
+            onSendWithImages={(images, text) => {
+                const textToSend = text || message.trim() || undefined;
+                sync.sendMessageWithImages(sessionId, images.map(img => ({ url: img.uri, width: img.width, height: img.height })), textToSend);
+                if (message.trim()) {
+                    setMessage('');
+                    clearDraft();
+                }
+                trackMessageSent();
+            }}
             onMicPress={isDisconnected ? undefined : micButtonState.onMicPress}
             isMicActive={isDisconnected ? false : micButtonState.isMicActive}
             onAbort={isDisconnected ? undefined : () => sessionAbort(sessionId)}
