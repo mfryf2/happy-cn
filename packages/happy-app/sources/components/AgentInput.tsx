@@ -530,6 +530,23 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     }, [handleBlockedSendAttempt, hasText, isSendBlocked, pendingImages, props]);
 
     /**
+     * 公共上传逻辑：将 base64 图片上传到服务器并追加到 pendingImages
+     */
+    const uploadImageData = React.useCallback(async (base64: string, rawMime: string) => {
+        const mimeType = (['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(rawMime)
+            ? rawMime
+            : 'image/jpeg') as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
+        const credentials = await TokenStorage.getCredentials();
+        if (!credentials) return;
+        const uploadResult = await uploadImage(credentials, base64, mimeType);
+        setPendingImages(prev => [...prev, {
+            uri: uploadResult.url,
+            width: uploadResult.width,
+            height: uploadResult.height,
+        }]);
+    }, []);
+
+    /**
      * 处理图片选择按钮点击：打开图库 → 获取 base64 → 上传到服务器 → 追加到 pendingImages
      */
     const [isPickingImage, doPickImage] = useHappyAction(React.useCallback(async () => {
@@ -564,18 +581,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         try {
                             const dataUrl = reader.result as string;
                             const base64 = dataUrl.split(',')[1];
-                            const rawMime = file.type || 'image/jpeg';
-                            const mimeType = (['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(rawMime)
-                                ? rawMime
-                                : 'image/jpeg') as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
-                            const credentials = await TokenStorage.getCredentials();
-                            if (!credentials) { if (!resolved) { resolved = true; resolve(); } return; }
-                            const uploadResult = await uploadImage(credentials, base64, mimeType);
-                            setPendingImages(prev => [...prev, {
-                                uri: uploadResult.url,
-                                width: uploadResult.width,
-                                height: uploadResult.height,
-                            }]);
+                            await uploadImageData(base64, file.type || 'image/jpeg');
                         } finally {
                             if (!resolved) { resolved = true; resolve(); }
                         }
@@ -596,22 +602,42 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             const asset = result.assets[0];
             if (!asset.base64) return;
 
-            const rawMime = asset.mimeType ?? 'image/jpeg';
-            const mimeType = (['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(rawMime)
-                ? rawMime
-                : 'image/jpeg') as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
-
-            const credentials = await TokenStorage.getCredentials();
-            if (!credentials) return;
-
-            const uploadResult = await uploadImage(credentials, asset.base64, mimeType);
-            setPendingImages(prev => [...prev, {
-                uri: uploadResult.url,
-                width: uploadResult.width,
-                height: uploadResult.height,
-            }]);
+            await uploadImageData(asset.base64, asset.mimeType ?? 'image/jpeg');
         }
-    }, []));
+    }, [uploadImageData]));
+
+    /**
+     * Web 端剪贴板粘贴图片支持：监听 paste 事件，若包含图片则自动上传
+     */
+    React.useEffect(() => {
+        if (Platform.OS !== 'web') return;
+
+        const handlePaste = (event: ClipboardEvent) => {
+            const items = event.clipboardData?.items;
+            if (!items) return;
+
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                if (item.type.startsWith('image/')) {
+                    event.preventDefault();
+                    const file = item.getAsFile();
+                    if (!file) continue;
+
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        const dataUrl = reader.result as string;
+                        const base64 = dataUrl.split(',')[1];
+                        uploadImageData(base64, file.type || 'image/jpeg').catch(console.error);
+                    };
+                    reader.readAsDataURL(file);
+                    break; // 每次粘贴只处理第一张图片
+                }
+            }
+        };
+
+        window.addEventListener('paste', handlePaste);
+        return () => window.removeEventListener('paste', handlePaste);
+    }, [uploadImageData]);
 
     // Handle keyboard navigation
     const handleKeyPress = React.useCallback((event: KeyPressEvent): boolean => {

@@ -1,6 +1,16 @@
 {
   "entries": [
     {
+      "version": 7,
+      "date": "2026-04-04",
+      "summary": "This release improves the web experience with better mobile layout rendering and clipboard image paste support.",
+      "changes": [
+        "Fixed agent message text being cut off on mobile web browsers — text now wraps correctly and stays within screen bounds.",
+        "Added clipboard image paste support on web — paste images directly with Ctrl+V / Cmd+V without using the file picker."
+      ],
+      "rawMarkdown": "## Version 7 - 2026-04-04\n\n\nThis release improves the web experience with better mobile layout rendering and clipboard image paste support.\n\n- Fixed agent message text being cut off on mobile web browsers — text now wraps correctly and stays within screen bounds.\n- Added clipboard image paste support on web — paste images directly with Ctrl+V / Cmd+V without using the file picker."
+    },
+    {
       "version": 6,
       "date": "2026-03-19",
       "summary": "This is the biggest update since launch — a redesigned session creation experience, Git worktree management, expanded agent support.",
@@ -84,5 +94,5 @@
       "rawMarkdown": "## Version 1 - 2025-05-12\n\n\nWelcome to Happy - your secure, encrypted mobile companion for Claude Code. This inaugural release establishes the foundation for private, powerful AI interactions on the go.\n\n- Implemented end-to-end encrypted session management ensuring complete privacy\n- Integrated intelligent voice assistant with natural conversation capabilities\n- Added experimental file manager with syntax highlighting and tree navigation\n- Built seamless real-time synchronization across all your devices\n- Established native support for iOS, Android, and responsive web interfaces"
     }
   ],
-  "latestVersion": 6
+  "latestVersion": 7
 }

@@ -1,5 +1,12 @@
 # Changelog
 
+## Version 7 - 2026-04-04
+
+This release improves the web experience with better mobile layout rendering and clipboard image paste support.
+
+- Fixed agent message text being cut off on mobile web browsers — text now wraps correctly and stays within screen bounds.
+- Added clipboard image paste support on web — paste images directly with Ctrl+V / Cmd+V without using the file picker.
+
 ## Version 6 - 2026-03-19
 
 This is the biggest update since launch — a redesigned session creation experience, Git worktree management, expanded agent support.
