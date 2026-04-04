@@ -362,7 +362,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
                         styles.button,
                         isPending && styles.buttonAllow,
                         isApprovedViaAllow && styles.buttonSelected,
-                        (isDenied || isApprovedViaAllEdits || isApprovedForSession) && styles.buttonInactive
+                        (isDenied || isApprovedViaAllEdits || isApprovedForSession || loadingAllEdits || loadingForSession) && styles.buttonInactive
                     ]}
                     onPress={handleApprove}
                     disabled={!isPending || loadingButton !== null || loadingAllEdits || loadingForSession}
@@ -392,7 +392,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
                             styles.button,
                             isPending && styles.buttonAllowAll,
                             isApprovedViaAllEdits && styles.buttonSelected,
-                            (isDenied || isApprovedViaAllow || isApprovedForSession) && styles.buttonInactive
+                            (isDenied || isApprovedViaAllow || isApprovedForSession || loadingButton !== null || loadingForSession) && styles.buttonInactive
                         ]}
                         onPress={handleApproveAllEdits}
                         disabled={!isPending || loadingButton !== null || loadingAllEdits || loadingForSession}
@@ -423,7 +423,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
                             styles.button,
                             isPending && styles.buttonForSession,
                             isApprovedForSession && styles.buttonSelected,
-                            (isDenied || isApprovedViaAllow || isApprovedViaAllEdits) && styles.buttonInactive
+                            (isDenied || isApprovedViaAllow || isApprovedViaAllEdits || loadingButton !== null || loadingAllEdits) && styles.buttonInactive
                         ]}
                         onPress={handleApproveForSession}
                         disabled={!isPending || loadingButton !== null || loadingAllEdits || loadingForSession}
@@ -452,7 +452,7 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({ permission, 
                         styles.button,
                         isPending && styles.buttonDeny,
                         isDenied && styles.buttonSelected,
-                        (isApproved) && styles.buttonInactive
+                        (isApproved || loadingButton !== null || loadingAllEdits || loadingForSession) && styles.buttonInactive
                     ]}
                     onPress={handleDeny}
                     disabled={!isPending || loadingButton !== null || loadingAllEdits || loadingForSession}
