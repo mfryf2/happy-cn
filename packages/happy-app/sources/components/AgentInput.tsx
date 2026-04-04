@@ -316,6 +316,27 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     imagePickerIcon: {
         fontSize: 20,
     },
+    dragOverlay: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        borderRadius: Platform.select({ default: 16, android: 20 }),
+        borderWidth: 2,
+        borderColor: theme.colors.button.primary.background,
+        borderStyle: 'dashed',
+        backgroundColor: theme.colors.button.primary.background + '15',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 10,
+        pointerEvents: 'none',
+    } as any,
+    dragOverlayText: {
+        color: theme.colors.button.primary.background,
+        fontSize: 14,
+        fontWeight: '500',
+    },
 }));
 
 const getContextWarning = (contextSize: number, alwaysShow: boolean = false, theme: Theme) => {
@@ -392,6 +413,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         width: number;
         height: number;
     }>>([]);
+
+    // Upload loading state for paste/drag-drop (web only)
+    const [isUploadingPastedImage, setIsUploadingPastedImage] = React.useState(false);
+    // Drag-over state for drag & drop highlight (web only)
+    const [isDragOver, setIsDragOver] = React.useState(false);
 
     const canPressSendButton = !props.isSending
         && !props.isSendDisabled
@@ -607,7 +633,39 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     }, [uploadImageData]));
 
     /**
-     * Web 端剪贴板粘贴图片支持：监听 paste 事件，若包含图片则自动上传
+     * 从 DataTransfer items 中提取图片文件并批量上传
+     */
+    const uploadImagesFromDataTransfer = React.useCallback(async (items: DataTransferItemList) => {
+        const imageFiles: File[] = [];
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            if (item.type.startsWith('image/')) {
+                const file = item.getAsFile();
+                if (file) imageFiles.push(file);
+            }
+        }
+        if (imageFiles.length === 0) return false;
+
+        setIsUploadingPastedImage(true);
+        try {
+            await Promise.all(imageFiles.map(file => new Promise<void>((resolve) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const dataUrl = reader.result as string;
+                    const base64 = dataUrl.split(',')[1];
+                    uploadImageData(base64, file.type || 'image/jpeg').catch(console.error).finally(resolve);
+                };
+                reader.onerror = () => resolve();
+                reader.readAsDataURL(file);
+            })));
+        } finally {
+            setIsUploadingPastedImage(false);
+        }
+        return true;
+    }, [uploadImageData]);
+
+    /**
+     * Web 端剪贴板粘贴图片支持：监听 paste 事件，若包含图片则自动上传（支持多图）
      */
     React.useEffect(() => {
         if (Platform.OS !== 'web') return;
@@ -616,28 +674,59 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             const items = event.clipboardData?.items;
             if (!items) return;
 
+            // 检查是否有图片，有则阻止默认并上传
             for (let i = 0; i < items.length; i++) {
-                const item = items[i];
-                if (item.type.startsWith('image/')) {
+                if (items[i].type.startsWith('image/')) {
                     event.preventDefault();
-                    const file = item.getAsFile();
-                    if (!file) continue;
-
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                        const dataUrl = reader.result as string;
-                        const base64 = dataUrl.split(',')[1];
-                        uploadImageData(base64, file.type || 'image/jpeg').catch(console.error);
-                    };
-                    reader.readAsDataURL(file);
-                    break; // 每次粘贴只处理第一张图片
+                    uploadImagesFromDataTransfer(items).catch(console.error);
+                    return;
                 }
             }
         };
 
         window.addEventListener('paste', handlePaste);
         return () => window.removeEventListener('paste', handlePaste);
-    }, [uploadImageData]);
+    }, [uploadImagesFromDataTransfer]);
+
+    /**
+     * Web 端拖拽图片上传支持
+     */
+    React.useEffect(() => {
+        if (Platform.OS !== 'web') return;
+
+        const handleDragOver = (event: DragEvent) => {
+            if (!event.dataTransfer) return;
+            // 只响应包含文件的拖拽
+            const hasFiles = Array.from(event.dataTransfer.types).includes('Files');
+            if (!hasFiles) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'copy';
+            setIsDragOver(true);
+        };
+
+        const handleDragLeave = (event: DragEvent) => {
+            // 只在离开整个 window 时取消高亮（避免子元素触发闪烁）
+            if (event.relatedTarget === null) {
+                setIsDragOver(false);
+            }
+        };
+
+        const handleDrop = (event: DragEvent) => {
+            setIsDragOver(false);
+            if (!event.dataTransfer) return;
+            event.preventDefault();
+            uploadImagesFromDataTransfer(event.dataTransfer.items).catch(console.error);
+        };
+
+        window.addEventListener('dragover', handleDragOver);
+        window.addEventListener('dragleave', handleDragLeave);
+        window.addEventListener('drop', handleDrop);
+        return () => {
+            window.removeEventListener('dragover', handleDragOver);
+            window.removeEventListener('dragleave', handleDragLeave);
+            window.removeEventListener('drop', handleDrop);
+        };
+    }, [uploadImagesFromDataTransfer]);
 
     // Handle keyboard navigation
     const handleKeyPress = React.useCallback((event: KeyPressEvent): boolean => {
@@ -1120,8 +1209,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 {/* Box 2: Action Area (Input + Send) */}
                 <Shaker ref={sendBlockShakerRef}>
                 <View style={styles.unifiedPanel}>
+                    {/* Drag & drop highlight overlay (web only) */}
+                    {isDragOver && (
+                        <View style={styles.dragOverlay}>
+                            <Ionicons name="image-outline" size={24} color={theme.colors.button.primary.background} />
+                            <Text style={styles.dragOverlayText}>Drop image here</Text>
+                        </View>
+                    )}
                     {/* Pending images preview - horizontal scroll with + button */}
-                    {pendingImages.length > 0 && (
+                    {(pendingImages.length > 0 || isUploadingPastedImage) && (
                         <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingTop: 8, gap: 8, flexWrap: 'wrap' }}>
                             {pendingImages.map((img, index) => (
                                 <View key={index} style={{ position: 'relative' }}>
@@ -1148,6 +1244,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     </Pressable>
                                 </View>
                             ))}
+                            {/* Upload loading placeholder (paste/drag-drop in progress) */}
+                            {isUploadingPastedImage && (
+                                <View style={{
+                                    width: 64,
+                                    height: 64,
+                                    borderRadius: 8,
+                                    backgroundColor: theme.colors.surfacePressed,
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                }}>
+                                    <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                                </View>
+                            )}
                             {/* Add more images button */}
                             <Pressable
                                 onPress={doPickImage}
