@@ -291,7 +291,6 @@ const styles = StyleSheet.create((theme) => ({
     marginHorizontal: 16,
     marginBottom: 12,
     borderRadius: 16,
-    alignSelf: 'flex-start',
   },
   agentEventContainer: {
     marginHorizontal: 8,
