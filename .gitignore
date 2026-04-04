@@ -63,3 +63,5 @@ progress*.txt
 docs/competition/opencode/traces/
 .gstack/
 packages/happy-app/dist-self-hosted/
+# 部署配置（含敏感信息，不入库）
+.happy-deploy.env

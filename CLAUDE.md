@@ -18,6 +18,22 @@ yarn app-logs                 # Start the log aggregator server
 yarn release                  # Run the release script
 ```
 
+## Deployment (IMPORTANT)
+
+**Never use `yarn ota` or `eas` commands — EAS CLI is not installed.**
+
+Use the deploy script at the repo root instead:
+
+```bash
+bash scripts/deploy.sh --frontend   # Deploy web frontend to production (happy.mingbaibao.com)
+bash scripts/deploy.sh --backend    # Deploy backend server
+bash scripts/deploy.sh --all        # Deploy frontend + backend
+bash scripts/deploy.sh --cli        # Update local CLI
+bash scripts/deploy.sh --all --cli  # Deploy everything
+```
+
+The frontend deploy script builds `packages/happy-app` with `expo export --platform web` and uploads to the server via SSH. Config is read from `~/.happy-deploy.env`.
+
 ### Environment Management
 
 The repo has a custom multi-environment system in `environments/`. Commands run from the repo root:
