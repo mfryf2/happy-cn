@@ -70,7 +70,7 @@ export class ApiClient {
             'Authorization': `Bearer ${this.credential.token}`,
             'Content-Type': 'application/json'
           },
-          timeout: 60000 // 1 minute timeout for very bad network connections
+          timeout: 15000 // 15 second timeout - fast enough to detect DNS/network failures
         }
       )
 
@@ -190,7 +190,7 @@ export class ApiClient {
             'Authorization': `Bearer ${this.credential.token}`,
             'Content-Type': 'application/json'
           },
-          timeout: 60000 // 1 minute timeout for very bad network connections
+          timeout: 15000 // 15 second timeout - fast enough to detect DNS/network failures
         }
       );
 
