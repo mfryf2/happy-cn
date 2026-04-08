@@ -113,7 +113,7 @@
 import { Message, ToolCall, ContentBlock } from "../typesMessage";
 import { AgentEvent, NormalizedMessage, UsageData } from "../typesRaw";
 import { createTracer, traceMessages, TracerState } from "./reducerTracer";
-import { AgentState } from "../storageTypes";
+import { AgentState, TodoItem, TodoItemsSchema } from "../storageTypes";
 import { MessageMeta } from "../typesMessageMeta";
 import { parseMessageAsEvent } from "./messageToEvent";
 import { normalizeContent, extractTextOrEmpty } from '@slopus/happy-wire';
@@ -153,12 +153,7 @@ export type ReducerState = {
     sidechains: Map<string, ReducerMessage[]>;
     tracerState: TracerState; // Tracer state for sidechain processing
     latestTodos?: {
-        todos: Array<{
-            content: string;
-            status: 'pending' | 'in_progress' | 'completed';
-            priority: 'high' | 'medium' | 'low';
-            id: string;
-        }>;
+        todos: TodoItem[];
         timestamp: number;
     };
     latestUsage?: {
@@ -238,12 +233,7 @@ function isDuplicateSidechainPrompt(
 
 export type ReducerResult = {
     messages: Message[];
-    todos?: Array<{
-        content: string;
-        status: 'pending' | 'in_progress' | 'completed';
-        priority: 'high' | 'medium' | 'low';
-        id: string;
-    }>;
+    todos?: TodoItem[];
     usage?: {
         inputTokens: number;
         outputTokens: number;
@@ -253,6 +243,20 @@ export type ReducerResult = {
     };
     hasReadyEvent?: boolean;
 };
+
+function updateLatestTodos(state: ReducerState, value: unknown, timestamp: number) {
+    const parsed = TodoItemsSchema.safeParse(value);
+    if (!parsed.success) {
+        return;
+    }
+
+    if (!state.latestTodos || timestamp > state.latestTodos.timestamp) {
+        state.latestTodos = {
+            todos: parsed.data,
+            timestamp,
+        };
+    }
+}
 
 export function reducer(state: ReducerState, messages: NormalizedMessage[], agentState?: AgentState | null): ReducerResult {
     if (ENABLE_LOGGING) {
@@ -745,16 +749,6 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
                             }
                             changed.add(existingMessageId);
 
-                            // Track TodoWrite tool inputs when updating existing messages
-                            if (message.tool.name === 'TodoWrite' && message.tool.state === 'running' && message.tool.input?.todos) {
-                                // Only update if this is newer than existing todos
-                                if (!state.latestTodos || message.tool.createdAt > state.latestTodos.timestamp) {
-                                    state.latestTodos = {
-                                        todos: message.tool.input.todos,
-                                        timestamp: message.tool.createdAt
-                                    };
-                                }
-                            }
                         }
                     } else {
                         if (ENABLE_LOGGING) {
@@ -813,16 +807,6 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
                         state.toolIdToMessageId.set(c.id, mid);
                         changed.add(mid);
 
-                        // Track TodoWrite tool inputs
-                        if (toolCall.name === 'TodoWrite' && toolCall.state === 'running' && toolCall.input?.todos) {
-                            // Only update if this is newer than existing todos
-                            if (!state.latestTodos || toolCall.createdAt > state.latestTodos.timestamp) {
-                                state.latestTodos = {
-                                    todos: toolCall.input.todos,
-                                    timestamp: toolCall.createdAt
-                                };
-                            }
-                        }
                     }
                 }
             }
@@ -882,6 +866,10 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
                                 decision: c.permissions.decision
                             };
                         }
+                    }
+
+                    if (message.tool.name === 'TodoWrite' && !c.is_error) {
+                        updateLatestTodos(state, message.tool.result?.newTodos, msg.createdAt);
                     }
 
                     changed.add(messageId);

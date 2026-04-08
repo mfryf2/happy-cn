@@ -1,6 +1,5 @@
 import React from 'react';
-import { View, Pressable, Platform, Image as RNImage } from 'react-native';
-import Animated, { useSharedValue, useAnimatedStyle, withRepeat, withTiming } from 'react-native-reanimated';
+import { View, Pressable, Platform } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
 import { Text } from '@/components/StyledText';
 import { Session, Machine } from '@/sync/storageTypes';
@@ -9,7 +8,7 @@ import { getSessionName, useSessionStatus, getSessionAvatarId, formatPathRelativ
 import { Avatar } from './Avatar';
 import { Typography } from '@/constants/Typography';
 import { StatusDot } from './StatusDot';
-import { useAllMachines, useSessionProjectGitStatus, useSessionGitStatus, useSetting } from '@/sync/storage';
+import { useAllMachines, useSessionProjectGitStatus, useSessionGitStatus } from '@/sync/storage';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
@@ -20,13 +19,6 @@ import { sessionKill } from '@/sync/ops';
 import { isWorktreePath, getRepoPath, getWorktreeName } from '@/utils/worktree';
 import { useNewSessionDraft } from '@/hooks/useNewSessionDraft';
 import { useRouter } from 'expo-router';
-
-const flavorIcons = {
-    claude: require('@/assets/images/icon-claude.png'),
-    codex: require('@/assets/images/icon-gpt.png'),
-    gemini: require('@/assets/images/icon-gemini.png'),
-    openclaw: require('@/assets/images/icon-openclaw.png'),
-};
 
 interface ActiveSessionsGroupProps {
     sessions: Session[];
@@ -135,6 +127,28 @@ const SectionHeader = React.memo(({ session, displayPath }: { session: Session; 
     );
 });
 
+// Full-width separator between machine groups: ——— 🖥 name ———
+const MachineSeparator = React.memo(({ machineName, machineId }: { machineName: string; machineId: string }) => {
+    const styles = stylesheet;
+    const { theme } = useUnistyles();
+    const router = useRouter();
+
+    const handlePress = React.useCallback(() => {
+        router.navigate(`/machine/${machineId}` as any);
+    }, [router, machineId]);
+
+    return (
+        <Pressable onPress={handlePress} style={styles.machineSeparator} hitSlop={{ top: 8, bottom: 8 }}>
+            <View style={styles.machineSeparatorLine} />
+            <Ionicons name="desktop-outline" size={11} color={theme.colors.textSecondary} style={{ marginHorizontal: 6 }} />
+            <Text style={styles.machineSeparatorText} numberOfLines={1}>
+                {machineName}
+            </Text>
+            <View style={styles.machineSeparatorLine} />
+        </Pressable>
+    );
+});
+
 export function ActiveSessionsGroupCompact({ sessions, selectedSessionId }: ActiveSessionsGroupProps) {
     const styles = stylesheet;
     const machines = useAllMachines();
@@ -147,143 +161,102 @@ export function ActiveSessionsGroupCompact({ sessions, selectedSessionId }: Acti
         return map;
     }, [machines]);
 
-    // Group sessions by project, then associate with machine
-    const projectGroups = React.useMemo(() => {
-        const groups = new Map<string, {
-            path: string;
-            displayPath: string;
-            machines: Map<string, {
-                machine: Machine | null;
-                machineName: string;
+    // Group sessions by machine, then by project within each machine
+    const { machineGroups, hasMultipleMachines } = React.useMemo(() => {
+        const unknownText = t('status.unknown');
+        const byMachine = new Map<string, {
+            machineId: string;
+            machineName: string;
+            projects: Map<string, {
+                displayPath: string;
                 sessions: Session[];
             }>;
         }>();
 
         sessions.forEach(session => {
-            const projectPath = session.metadata?.path || '';
-            const unknownText = t('status.unknown');
             const machineId = session.metadata?.machineId || unknownText;
-
             const machine = machineId !== unknownText ? machinesMap[machineId] : null;
             const machineName = machine?.metadata?.displayName ||
                 machine?.metadata?.host ||
                 (machineId !== unknownText ? machineId : `<${unknownText}>`);
 
-            let projectGroup = groups.get(projectPath);
+            let machineGroup = byMachine.get(machineId);
+            if (!machineGroup) {
+                machineGroup = { machineId, machineName, projects: new Map() };
+                byMachine.set(machineId, machineGroup);
+            }
+
+            const projectPath = session.metadata?.path || '';
+            let projectGroup = machineGroup.projects.get(projectPath);
             if (!projectGroup) {
                 const displayPath = formatPathRelativeToHome(projectPath, session.metadata?.homeDir);
-                projectGroup = {
-                    path: projectPath,
-                    displayPath,
-                    machines: new Map()
-                };
-                groups.set(projectPath, projectGroup);
+                projectGroup = { displayPath, sessions: [] };
+                machineGroup.projects.set(projectPath, projectGroup);
             }
 
-            let machineGroup = projectGroup.machines.get(machineId);
-            if (!machineGroup) {
-                machineGroup = {
-                    machine,
-                    machineName,
-                    sessions: []
-                };
-                projectGroup.machines.set(machineId, machineGroup);
-            }
-
-            machineGroup.sessions.push(session);
+            projectGroup.sessions.push(session);
         });
 
-        groups.forEach(projectGroup => {
-            projectGroup.machines.forEach(machineGroup => {
-                machineGroup.sessions.sort((a, b) => b.createdAt - a.createdAt);
+        // Sort sessions within each project group
+        byMachine.forEach(mg => {
+            mg.projects.forEach(pg => {
+                pg.sessions.sort((a, b) => b.createdAt - a.createdAt);
             });
         });
 
-        return groups;
-    }, [sessions, machinesMap]);
+        const sorted = Array.from(byMachine.values()).sort((a, b) =>
+            a.machineName.localeCompare(b.machineName)
+        );
 
-    const sortedProjectGroups = React.useMemo(() => {
-        return Array.from(projectGroups.entries()).sort(([, groupA], [, groupB]) => {
-            return groupA.displayPath.localeCompare(groupB.displayPath);
-        });
-    }, [projectGroups]);
+        return { machineGroups: sorted, hasMultipleMachines: byMachine.size > 1 };
+    }, [sessions, machinesMap]);
 
     return (
         <View style={styles.container}>
-            {sortedProjectGroups.map(([projectPath, projectGroup]) => {
-                const firstSession = Array.from(projectGroup.machines.values())[0]?.sessions[0];
+            {machineGroups.map(machineGroup => {
+                const sortedProjects = Array.from(machineGroup.projects.entries()).sort(
+                    ([, a], [, b]) => a.displayPath.localeCompare(b.displayPath)
+                );
 
                 return (
-                    <View key={projectPath}>
-                        {firstSession && (
-                            <SectionHeader
-                                session={firstSession}
-                                displayPath={projectGroup.displayPath}
+                    <React.Fragment key={machineGroup.machineId}>
+                        {hasMultipleMachines && (
+                            <MachineSeparator
+                                machineName={machineGroup.machineName}
+                                machineId={machineGroup.machineId}
                             />
                         )}
+                        {sortedProjects.map(([projectPath, projectGroup]) => {
+                            const firstSession = projectGroup.sessions[0];
+                            if (!firstSession) return null;
 
-                        <View style={styles.projectCard}>
-                            {Array.from(projectGroup.machines.entries())
-                                .sort(([, machineA], [, machineB]) => machineA.machineName.localeCompare(machineB.machineName))
-                                .map(([machineId, machineGroup]) => (
-                                    <View key={`${projectPath}-${machineId}`}>
-                                        {machineGroup.sessions.map((session, index) => (
+                            return (
+                                <View key={projectPath}>
+                                    <SectionHeader
+                                        session={firstSession}
+                                        displayPath={projectGroup.displayPath}
+                                    />
+                                    <View style={styles.projectCard}>
+                                        {projectGroup.sessions.map((session, index) => (
                                             <CompactSessionRow
                                                 key={session.id}
                                                 session={session}
                                                 selected={selectedSessionId === session.id}
-                                                showBorder={index < machineGroup.sessions.length - 1 ||
-                                                    Array.from(projectGroup.machines.keys()).indexOf(machineId) < projectGroup.machines.size - 1}
+                                                showBorder={index < projectGroup.sessions.length - 1}
                                             />
                                         ))}
                                     </View>
-                                ))}
-                        </View>
-                    </View>
+                                </View>
+                            );
+                        })}
+                    </React.Fragment>
                 );
             })}
         </View>
     );
 }
 
-// Small agent icon with pulsing animation matching StatusDot behavior
-const PulsingAgentIcon = React.memo(({ flavorIcon, isPulsing, tintColor, opacity: baseOpacity }: {
-    flavorIcon: any;
-    isPulsing: boolean;
-    tintColor?: string;
-    opacity: number;
-}) => {
-    const opacity = useSharedValue(baseOpacity);
-
-    React.useEffect(() => {
-        if (isPulsing) {
-            opacity.value = withRepeat(
-                withTiming(0.3, { duration: 1000 }),
-                -1,
-                true
-            );
-        } else {
-            opacity.value = withTiming(baseOpacity, { duration: 200 });
-        }
-    }, [isPulsing, baseOpacity]);
-
-    const animatedStyle = useAnimatedStyle(() => ({
-        opacity: opacity.value,
-    }));
-
-    return (
-        <Animated.View style={[{ width: 16, height: 16, alignItems: 'center', justifyContent: 'center', marginRight: 8 }, animatedStyle]}>
-            <RNImage
-                source={flavorIcon}
-                style={{ width: 8, height: 8 }}
-                resizeMode="contain"
-                tintColor={tintColor}
-            />
-        </Animated.View>
-    );
-});
-
-// Compact session row — agent icon replaces dot when showFlavorIcons is on
+// Compact session row with status dot indicator
 const CompactSessionRow = React.memo(({ session, selected, showBorder }: { session: Session; selected?: boolean; showBorder?: boolean }) => {
     const styles = stylesheet;
     const { theme } = useUnistyles();
@@ -293,10 +266,6 @@ const CompactSessionRow = React.memo(({ session, selected, showBorder }: { sessi
     const swipeableRef = React.useRef<Swipeable | null>(null);
     const swipeEnabled = Platform.OS !== 'web';
     const [actionsAnchor, setActionsAnchor] = React.useState<SessionActionsAnchor | null>(null);
-    const showFlavorIcons = useSetting('showFlavorIcons');
-
-    const flavor = session.metadata?.flavor || 'claude';
-    const flavorIcon = flavorIcons[flavor as keyof typeof flavorIcons] || flavorIcons.claude;
 
     const [archivingSession, performArchive] = useHappyAction(async () => {
         const result = await sessionKill(session.id);
@@ -340,7 +309,7 @@ const CompactSessionRow = React.memo(({ session, selected, showBorder }: { sessi
         >
             <View style={styles.sessionContent}>
                 <View style={styles.sessionTitleRow}>
-                    {/* Left indicator: agent icon OR status dot/draft */}
+                    {/* Left indicator: status dot or draft icon */}
                     {(() => {
                         // Show draft icon when online with draft
                         if (sessionStatus.state === 'waiting' && session.draft) {
@@ -350,22 +319,6 @@ const CompactSessionRow = React.memo(({ session, selected, showBorder }: { sessi
                                     size={14}
                                     color={theme.colors.textSecondary}
                                     style={{ marginRight: 8 }}
-                                />
-                            );
-                        }
-
-                        // When showFlavorIcons is on, show agent icon instead of dot
-                        if (showFlavorIcons) {
-                            return (
-                                <PulsingAgentIcon
-                                    flavorIcon={flavorIcon}
-                                    isPulsing={sessionStatus.state === 'permission_required' || sessionStatus.state === 'thinking'}
-                                    tintColor={
-                                        (sessionStatus.state === 'permission_required' || sessionStatus.state === 'thinking')
-                                            ? sessionStatus.statusDotColor
-                                            : flavor === 'codex' ? theme.colors.text : undefined
-                                    }
-                                    opacity={sessionStatus.state === 'waiting' ? 0.5 : (sessionStatus.isConnected ? 1 : 0.3)}
                                 />
                             );
                         }
@@ -510,6 +463,25 @@ const stylesheet = StyleSheet.create((theme) => ({
         marginLeft: 4,
         padding: 8,
     },
+    // Machine separator styles
+    machineSeparator: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: Platform.select({ ios: 32, default: 24 }),
+        paddingTop: 8,
+        paddingBottom: 0,
+    },
+    machineSeparatorLine: {
+        flex: 1,
+        height: StyleSheet.hairlineWidth,
+        backgroundColor: theme.colors.divider,
+    },
+    machineSeparatorText: {
+        fontSize: 11,
+        color: theme.colors.textSecondary,
+        ...Typography.default('regular'),
+        marginRight: 4,
+    },
     // Project card styles
     projectCard: {
         backgroundColor: theme.colors.surface,
@@ -537,12 +509,6 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     sessionRowSelected: {
         backgroundColor: theme.colors.surfaceSelected,
-    },
-    agentIconContainer: {
-        width: 16,
-        height: 16,
-        alignItems: 'center',
-        justifyContent: 'center',
     },
     sessionContent: {
         flex: 1,

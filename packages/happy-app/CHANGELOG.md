@@ -1,11 +1,19 @@
 # Changelog
 
-## Version 7 - 2026-04-04
+## Version 8 - 2026-04-04
 
 This release improves the web experience with better mobile layout rendering and clipboard image paste support.
 
 - Fixed agent message text being cut off on mobile web browsers — text now wraps correctly and stays within screen bounds.
 - Added clipboard image paste support on web — paste images directly with Ctrl+V / Cmd+V without using the file picker.
+
+## Version 7 - 2026-04-03
+
+Added support for the latest Gemini models in the model picker, so you can take advantage of Google's newest and most powerful AI capabilities.
+
+- Added Gemini 3.1 Pro, Gemini 3 Flash, and Gemini 3.1 Flash Lite to the model picker
+- Gemini 3.x models now appear at the top of the list for quick access
+- Gemini 2.5 models remain available for stability
 
 ## Version 6 - 2026-03-19
 
