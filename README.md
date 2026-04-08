@@ -81,9 +81,15 @@ We're engineers scattered across Bay Area coffee shops and hacker houses, consta
 - **[Contributing Guide](docs/CONTRIBUTING.md)** - How to contribute, PR guidelines, and development setup
 - **[Edit docs at github.com/slopus/slopus.github.io](https://github.com/slopus/slopus.github.io)** - Help improve our documentation and guides
 
-## 🇨🇳 中国大陆用户
+## 🇨🇳 中国大陆用户 / China Mainland
 
-官方服务在国内无法访问。如果你在中国大陆使用中转 API 或内部定制版 Claude Code，请查看：
+官方服务在国内无法访问。本仓库（`mfryf2/happy-cn`）针对中国大陆环境做了适配，并在上游基础上新增了以下功能：
+
+- 🖼️ **图片上传** — 网页端直接粘贴或拖拽图片发送给 AI
+- 🔌 **自定义 Claude 路径** — 通过 `HAPPY_CLAUDE_PATH` 支持公司定制版 Claude Code
+- 🚀 **一键部署脚本** — 快速搭建和更新自建服务器
+
+如果你在中国大陆使用中转 API 或内部定制版 Claude Code，请查看：
 
 **[📖 中文使用指南 README.zh.md](./README.zh.md)**
 
