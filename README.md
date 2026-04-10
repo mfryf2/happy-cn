@@ -1,4 +1,10 @@
-<div align="center"><img src="/.github/logotype-dark.png" width="400" title="Happy Coder" alt="Happy Coder"/></div>
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="/.github/logotype-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="/.github/logotype-light.png">
+    <img src="/.github/logotype-dark.png" width="400" alt="Happy">
+  </picture>
+</div>
 
 <h1 align="center">
   Mobile and Web Client for Claude Code & Codex
@@ -30,28 +36,21 @@ Step 2: Install CLI on your computer
 </h3>
 
 ```bash
-npm install -g happy-coder
+npm install -g happy
 ```
+
+> Migrated from the `happy-coder` package. Thanks to [@franciscop](https://github.com/franciscop) for donating the `happy` package name!
 
 <h3 align="center">
 Step 3: Start using `happy` instead of `claude` or `codex`
 </h3>
 
 ```bash
-
-# Instead of: claude
-# Use: happy
-
-happy
-
-# Instead of: codex
-# Use: happy codex
-
+# Instead of claude, use:
+happy claude
+# or
 happy codex
-
 ```
-
-<div align="center"><img src="/.github/mascot.png" width="200" title="Happy Coder" alt="Happy Coder"/></div>
 
 ## How does it work?
 
@@ -79,12 +78,18 @@ We're engineers scattered across Bay Area coffee shops and hacker houses, consta
 ## 📚 Documentation & Contributing
 
 - **[Documentation Website](https://happy.engineering/docs/)** - Learn how to use Happy Coder effectively
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Development setup including iOS, Android, and macOS desktop variant builds
+- **[Contributing Guide](docs/CONTRIBUTING.md)** - How to contribute, PR guidelines, and development setup
 - **[Edit docs at github.com/slopus/slopus.github.io](https://github.com/slopus/slopus.github.io)** - Help improve our documentation and guides
 
-## 🇨🇳 中国大陆用户
+## 🇨🇳 中国大陆用户 / China Mainland
 
-官方服务在国内无法访问。如果你在中国大陆使用中转 API 或内部定制版 Claude Code，请查看：
+官方服务在国内无法访问。本仓库（`mfryf2/happy-cn`）针对中国大陆环境做了适配，并在上游基础上新增了以下功能：
+
+- 🖼️ **图片上传** — 网页端直接粘贴或拖拽图片发送给 AI
+- 🔌 **自定义 Claude 路径** — 通过 `HAPPY_CLAUDE_PATH` 支持公司定制版 Claude Code
+- 🚀 **一键部署脚本** — 快速搭建和更新自建服务器
+
+如果你在中国大陆使用中转 API 或内部定制版 Claude Code，请查看：
 
 **[📖 中文使用指南 README.zh.md](./README.zh.md)**
 

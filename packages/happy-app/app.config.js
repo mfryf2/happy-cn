@@ -160,9 +160,9 @@ export default {
             ]
         ],
         updates: {
-            url: "https://u.expo.dev/4558dd3d-cd5a-47cd-bad9-e591a241cc06",
+            url: "https://u.expo.dev/2b405458-51d1-4618-a556-a91d18701c42",
             requestHeaders: {
-                "expo-channel-name": "production"
+                "expo-channel-name": "preview"
             }
         },
         experiments: {
@@ -173,7 +173,7 @@ export default {
                 root: "./sources/app"
             },
             eas: {
-                projectId: "4558dd3d-cd5a-47cd-bad9-e591a241cc06"
+                projectId: "2b405458-51d1-4618-a556-a91d18701c42"
             },
             app: {
                 postHogKey: process.env.EXPO_PUBLIC_POSTHOG_API_KEY,
@@ -184,6 +184,6 @@ export default {
                 consoleLoggingDefault,
             }
         },
-        owner: "bulkacorp"
+        owner: "mfr.buaa"
     }
 };
