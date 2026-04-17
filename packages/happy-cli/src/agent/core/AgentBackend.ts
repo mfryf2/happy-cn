@@ -116,7 +116,7 @@ export interface AgentBackend {
    * @param sessionId - The session to send the prompt to
    * @param prompt - The user's prompt text
    */
-  sendPrompt(sessionId: SessionId, prompt: string): Promise<void>;
+  sendPrompt(sessionId: SessionId, prompt: string, blocks?: import('@/api/types').ContentBlock[]): Promise<void>;
   
   /**
    * Cancel the current operation in a session.

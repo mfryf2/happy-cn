@@ -821,7 +821,8 @@ export async function runAcp(opts: {
   backend.onMessage(onBackendMessage);
 
   session.onUserMessage((message) => {
-    if (!extractText(normalizeContent(message.content))) {
+    const blocks = normalizeContent(message.content);
+    if (!extractText(blocks)) {
       return;
     }
 
@@ -835,10 +836,11 @@ export async function runAcp(opts: {
       logger.debug(`[${opts.agentName}] Requested ACP model: ${currentModel ?? 'null'}`);
     }
 
-    messageQueue.push(extractTextOrEmpty(normalizeContent(message.content)), {
+    const imageBlocks = blocks.filter(b => b.type === 'image_url');
+    messageQueue.push(extractTextOrEmpty(blocks), {
       permissionMode: currentPermissionMode,
       model: currentModel,
-    });
+    }, imageBlocks.length > 0 ? imageBlocks : undefined);
   });
   session.keepAlive(thinking, 'remote');
 
@@ -910,7 +912,7 @@ export async function runAcp(opts: {
         if (typeof batch.mode.model === 'string' && batch.mode.model.length > 0) {
           await switchModelIfRequested(batch.mode.model);
         }
-        await backend.sendPrompt(acpSessionId, batch.message);
+        await backend.sendPrompt(acpSessionId, batch.message, batch.blocks);
         await turnEnded;
         sendEnvelopes(sessionManager.endTurn('completed'));
         session.sendSessionEvent({ type: 'ready' });

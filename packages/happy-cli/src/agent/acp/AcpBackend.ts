@@ -33,6 +33,7 @@ import type {
 } from '../core';
 import { logger } from '@/ui/logger';
 import { delay } from '@/utils/time';
+import type { ContentBlock as AppContentBlock } from '@/api/types';
 import packageJson from '../../../package.json';
 
 /**
@@ -1037,7 +1038,7 @@ export class AcpBackend implements AgentBackend {
   private idleResolver: (() => void) | null = null;
   private waitingForResponse = false;
 
-  async sendPrompt(sessionId: SessionId, prompt: string): Promise<void> {
+  async sendPrompt(sessionId: SessionId, prompt: string, blocks?: AppContentBlock[]): Promise<void> {
     // Check if prompt contains change_title instruction (via optional callback)
     const promptHasChangeTitle = this.options.hasChangeTitleInstruction?.(prompt) ?? false;
 
@@ -1062,15 +1063,29 @@ export class AcpBackend implements AgentBackend {
     try {
       logger.debug(`[AcpBackend] Sending prompt (length: ${prompt.length}): ${prompt.substring(0, 100)}...`);
       logger.debug(`[AcpBackend] Full prompt: ${prompt}`);
-      
-      const contentBlock: ContentBlock = {
-        type: 'text',
-        text: prompt,
-      };
+
+      const promptBlocks: ContentBlock[] = [{ type: 'text', text: prompt }];
+
+      if (blocks) {
+        for (const block of blocks) {
+          if (block.type === 'image_url') {
+            try {
+              const response = await fetch(block.url);
+              const arrayBuffer = await response.arrayBuffer();
+              const base64 = Buffer.from(arrayBuffer).toString('base64');
+              const mimeType = response.headers.get('content-type') || 'image/jpeg';
+              promptBlocks.push({ type: 'image', data: base64, mimeType });
+              logger.debug(`[AcpBackend] Converted image_url to base64 (mimeType: ${mimeType}, size: ${arrayBuffer.byteLength} bytes)`);
+            } catch (imgError) {
+              logger.debug(`[AcpBackend] Failed to fetch image from ${block.url}:`, imgError);
+            }
+          }
+        }
+      }
 
       const promptRequest: PromptRequest = {
         sessionId: this.acpSessionId,
-        prompt: [contentBlock],
+        prompt: promptBlocks,
       };
 
       logger.debug(`[AcpBackend] Prompt request:`, JSON.stringify(promptRequest, null, 2));
