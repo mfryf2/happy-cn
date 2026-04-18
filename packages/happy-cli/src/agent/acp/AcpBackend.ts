@@ -50,6 +50,33 @@ const RETRY_CONFIG = {
 const ACP_MUTED_COLOR = '\u001b[90m';
 const ACP_COLOR_RESET = '\u001b[0m';
 
+/**
+ * Detect image MIME type from binary magic bytes.
+ * HTTP Content-Type headers may be inaccurate (e.g. server returns image/jpeg for a PNG file).
+ * Magic byte detection ensures we pass the correct mimeType to ACP agents.
+ */
+function detectImageMimeType(arrayBuffer: ArrayBuffer): string | null {
+  const bytes = new Uint8Array(arrayBuffer.slice(0, 12));
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
+    return 'image/png';
+  }
+  // JPEG: FF D8 FF
+  if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
+    return 'image/jpeg';
+  }
+  // GIF: 47 49 46 38
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) {
+    return 'image/gif';
+  }
+  // WebP: 52 49 46 46 ?? ?? ?? ?? 57 45 42 50
+  if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+    return 'image/webp';
+  }
+  return null;
+}
+
 function formatAcpTime(date: Date = new Date()): string {
   const hours = String(date.getHours()).padStart(2, '0');
   const minutes = String(date.getMinutes()).padStart(2, '0');
@@ -1077,7 +1104,8 @@ export class AcpBackend implements AgentBackend {
               const response = await fetch(block.url);
               const arrayBuffer = await response.arrayBuffer();
               const base64 = Buffer.from(arrayBuffer).toString('base64');
-              const mimeType = response.headers.get('content-type') || 'image/jpeg';
+              // Detect actual mimeType from magic bytes (ignore HTTP Content-Type which may be wrong)
+              const mimeType = detectImageMimeType(arrayBuffer) || response.headers.get('content-type') || 'image/jpeg';
               promptBlocks.push({ type: 'image', data: base64, mimeType });
               logger.debug(`[AcpBackend] Converted image_url to base64 (mimeType: ${mimeType}, size: ${arrayBuffer.byteLength} bytes)`);
             } catch (imgError) {
