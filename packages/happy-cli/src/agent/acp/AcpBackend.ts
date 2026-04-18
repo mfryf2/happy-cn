@@ -321,6 +321,7 @@ export class AcpBackend implements AgentBackend {
   private connection: ClientSideConnection | null = null;
   private acpSessionId: string | null = null;
   private disposed = false;
+  private agentSupportsImage = false;
   /** Track active tool calls to prevent duplicate events */
   private activeToolCalls = new Set<string>();
   private toolCallTimeouts = new Map<string, NodeJS.Timeout>();
@@ -772,6 +773,9 @@ export class AcpBackend implements AgentBackend {
         }
       );
       logger.debug(`[AcpBackend] Initialize completed`);
+      logger.debug(`[AcpBackend] Initialize response:`, JSON.stringify(initializeResponse));
+      this.agentSupportsImage = initializeResponse?.agentCapabilities?.promptCapabilities?.image === true;
+      logger.debug(`[AcpBackend] Agent supports image: ${this.agentSupportsImage}`);
       if (this.options.verbose) {
         logAcpBackendMuted(
           `Incoming initialize response from ${this.options.agentName}: ${summarizeSessionMetadataPayload(initializeResponse)}`,
@@ -1066,7 +1070,7 @@ export class AcpBackend implements AgentBackend {
 
       const promptBlocks: ContentBlock[] = [{ type: 'text', text: prompt }];
 
-      if (blocks) {
+      if (blocks && this.agentSupportsImage) {
         for (const block of blocks) {
           if (block.type === 'image_url') {
             try {
@@ -1081,6 +1085,8 @@ export class AcpBackend implements AgentBackend {
             }
           }
         }
+      } else if (blocks && !this.agentSupportsImage) {
+        logger.debug(`[AcpBackend] Skipping ${blocks.filter(b => b.type === 'image_url').length} image(s): agent does not declare image capability`);
       }
 
       const promptRequest: PromptRequest = {
