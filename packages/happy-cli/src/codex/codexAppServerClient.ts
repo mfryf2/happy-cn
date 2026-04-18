@@ -8,6 +8,9 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { logger } from '@/ui/logger';
 import { execSync } from 'child_process';
 import type {
@@ -54,19 +57,73 @@ export type ApprovalHandler = (params: {
 }) => Promise<ReviewDecision>;
 
 /**
- * Check that `codex app-server` is available.
+ * Detect which Codex binary is available and which mode to use.
+ * Returns 'codex' for upstream OpenAI Codex (app-server mode),
+ * 'codex-internal' for Tencent internal build (mcp-server mode),
+ * or null if neither is found.
  */
-function isAppServerAvailable(): boolean {
+function detectCodexBinary(): 'codex' | 'codex-internal' | null {
     try {
         const version = execSync('codex --version', { encoding: 'utf8', windowsHide: true }).trim();
         const match = version.match(/codex-cli\s+(\d+\.\d+\.\d+)/);
-        if (!match) return false;
-        const [, ver] = match;
-        const [major, minor] = ver.split('.').map(Number);
-        // app-server available in recent versions
-        return major > 0 || minor >= 100;
+        if (match) {
+            const [, ver] = match;
+            const [major, minor] = ver.split('.').map(Number);
+            if (major > 0 || minor >= 100) return 'codex';
+        }
+    } catch { }
+    try {
+        const out = execSync('codex-internal --version', { encoding: 'utf8', windowsHide: true }).trim();
+        if (out.length > 0) return 'codex-internal';
+    } catch { }
+    return null;
+}
+
+/**
+ * Load authentication environment variables for codex-internal.
+ *
+ * codex-internal's `mcp-server` subcommand bypasses its own `prepareEnvironment()`
+ * (which is only called in interactive/login flows), so the internal gateway URL
+ * and access token are never injected automatically.
+ *
+ * We replicate the same logic here:
+ *  - Read accessToken from ~/.codex-internal/config.json
+ *  - Set openai_base_url to the Tencent internal gateway
+ *  - Set OPENAI_API_KEY / CODEX_API_KEY / AUTH_TOKEN to the accessToken
+ *  - Clear any stale OPENAI_* env vars that would override the base URL
+ */
+function loadCodexInternalEnv(env: Record<string, string>): void {
+    const CODEX_INTERNAL_GATEWAY = 'https://copilot.code.woa.com/server/chat/codebuddy-gateway/codex';
+    const configPath = join(homedir(), '.codex-internal', 'config.json');
+
+    let accessToken: string | null = null;
+    try {
+        const raw = readFileSync(configPath, 'utf8');
+        const parsed = JSON.parse(raw) as { accessToken?: string };
+        if (typeof parsed.accessToken === 'string' && parsed.accessToken.length > 0) {
+            accessToken = parsed.accessToken;
+        }
     } catch {
-        return false;
+        logger.debug('[CodexAppServer] codex-internal: could not read config.json, skipping token injection');
+    }
+
+    // Clear upstream OPENAI_* overrides that would bypass the internal gateway
+    for (const key of Object.keys(env)) {
+        if (key.toUpperCase().startsWith('OPENAI_') || key.toUpperCase().startsWith('CODEX_INTERNAL_')) {
+            delete env[key];
+        }
+    }
+
+    // Inject internal gateway URL (codex-internal reads this env var as its base URL)
+    env.openai_base_url = CODEX_INTERNAL_GATEWAY;
+
+    if (accessToken) {
+        env.OPENAI_API_KEY = accessToken;
+        env.CODEX_API_KEY = accessToken;
+        env.AUTH_TOKEN = accessToken;
+        logger.debug('[CodexAppServer] codex-internal: injected internal gateway and access token');
+    } else {
+        logger.warn('[CodexAppServer] codex-internal: no accessToken found in config.json — run `codex-internal` once to authenticate');
     }
 }
 
@@ -110,6 +167,11 @@ export class CodexAppServerClient {
     private sandboxConfig?: SandboxConfig;
     private sandboxCleanup: (() => Promise<void>) | null = null;
     public sandboxEnabled = false;
+
+    /** Transport mode — set during connect() based on detected binary. */
+    private mode: 'app-server' | 'mcp-server' = 'app-server';
+    /** MCP mode: stores thread context since MCP has no thread/start RPC. */
+    private mcpThreadContext: { model?: string; cwd?: string; approvalPolicy?: ApprovalPolicy; } | null = null;
 
     // Session state
     private _threadId: string | null = null;
@@ -374,7 +436,8 @@ export class CodexAppServerClient {
     async connect(): Promise<void> {
         if (this.connected) return;
 
-        if (!isAppServerAvailable()) {
+        const detectedBinary = detectCodexBinary();
+        if (!detectedBinary) {
             throw new Error(
                 'Codex CLI is not installed\n\n' +
                 'Please install Codex CLI using one of these methods:\n\n' +
@@ -384,11 +447,16 @@ export class CodexAppServerClient {
             );
         }
 
-        let command = 'codex';
-        let args = ['app-server', '--listen', 'stdio://'];
+        this.mode = detectedBinary === 'codex-internal' ? 'mcp-server' : 'app-server';
+        logger.debug(`[CodexAppServer] Detected binary: ${detectedBinary}, mode: ${this.mode}`);
+
+        let command: string = detectedBinary;
+        let args = this.mode === 'mcp-server'
+            ? ['mcp-server']
+            : ['app-server', '--listen', 'stdio://'];
         this.sandboxEnabled = false;
 
-        if (this.sandboxConfig?.enabled && process.platform !== 'win32') {
+        if (this.sandboxConfig?.enabled && process.platform !== 'win32' && this.mode === 'app-server') {
             try {
                 this.sandboxCleanup = await initializeSandbox(this.sandboxConfig, process.cwd());
                 const wrapped = await wrapForMcpTransport('codex', ['app-server', '--listen', 'stdio://']);
@@ -416,6 +484,12 @@ export class CodexAppServerClient {
         }
         if (this.sandboxEnabled) {
             env.CODEX_SANDBOX = 'seatbelt';
+        }
+
+        // codex-internal mcp-server bypasses its own prepareEnvironment(), so
+        // we must inject the internal gateway URL and access token ourselves.
+        if (this.mode === 'mcp-server') {
+            loadCodexInternalEnv(env);
         }
 
         logger.debug(`[CodexAppServer] Spawning: ${command} ${args.join(' ')}`);
@@ -464,21 +538,35 @@ export class CodexAppServerClient {
             this.handleLine(line, epoch);
         });
 
-        // Perform initialize handshake
-        const initParams: InitializeParams = {
-            clientInfo: {
-                name: 'happy-codex',
-                title: 'Happy Codex Client',
-                version: packageJson.version,
-            },
-            capabilities: {
-                experimentalApi: true,
-            },
-        };
-        await this.request('initialize', initParams);
-        this.notify('initialized');
+        if (this.mode === 'mcp-server') {
+            // MCP initialize handshake
+            await this.request('initialize', {
+                protocolVersion: '2024-11-05',
+                capabilities: {},
+                clientInfo: {
+                    name: 'happy-codex',
+                    version: packageJson.version,
+                },
+            });
+            this.notify('notifications/initialized');
+        } else {
+            // app-server initialize handshake
+            const initParams: InitializeParams = {
+                clientInfo: {
+                    name: 'happy-codex',
+                    title: 'Happy Codex Client',
+                    version: packageJson.version,
+                },
+                capabilities: {
+                    experimentalApi: true,
+                },
+            };
+            await this.request('initialize', initParams);
+            this.notify('initialized');
+        }
+
         this.connected = true;
-        logger.debug('[CodexAppServer] Connected and initialized');
+        logger.debug(`[CodexAppServer] Connected and initialized (mode=${this.mode})`);
     }
 
     private async disconnectInternal(opts?: { preserveThreadState?: boolean }): Promise<void> {
@@ -516,6 +604,7 @@ export class CodexAppServerClient {
         if (!opts?.preserveThreadState) {
             this._threadId = null;
             this.threadDefaults = null;
+            this.mcpThreadContext = null;
         }
 
         // Fail in-flight requests from this process generation.
@@ -570,6 +659,21 @@ export class CodexAppServerClient {
         sandbox?: SandboxMode;
         mcpServers?: Record<string, unknown>;
     }): Promise<{ threadId: string; model: string }> {
+        if (this.mode === 'mcp-server') {
+            // MCP mode: no thread/start RPC; create a pseudo thread-id and store context
+            const pseudoThreadId = `mcp-pending-${Date.now()}`;
+            this._threadId = pseudoThreadId;
+            this._turnId = null;
+            this.mcpThreadContext = {
+                model: opts.model,
+                cwd: opts.cwd ?? process.cwd(),
+                approvalPolicy: opts.approvalPolicy,
+            };
+            this.rememberThreadDefaults(opts);
+            logger.debug('[CodexAppServer] MCP thread context stored, pseudo-id:', pseudoThreadId);
+            return { threadId: pseudoThreadId, model: opts.model ?? 'default' };
+        }
+
         const params: NewConversationParams = {
             model: opts.model ?? null,
             modelProvider: null,
@@ -605,6 +709,27 @@ export class CodexAppServerClient {
         const threadId = opts?.threadId ?? this._threadId;
         if (!threadId) {
             throw new Error('No thread available to resume.');
+        }
+
+        if (this.mode === 'mcp-server') {
+            // MCP mode: no resume RPC; update the stored context and use the threadId directly
+            const defaults = this.threadDefaults ?? {};
+            this._threadId = threadId;
+            this._turnId = null;
+            this.mcpThreadContext = {
+                model: opts?.model ?? defaults.model,
+                cwd: opts?.cwd ?? defaults.cwd ?? process.cwd(),
+                approvalPolicy: opts?.approvalPolicy ?? defaults.approvalPolicy,
+            };
+            this.rememberThreadDefaults({
+                model: opts?.model ?? defaults.model,
+                cwd: opts?.cwd ?? defaults.cwd,
+                approvalPolicy: opts?.approvalPolicy ?? defaults.approvalPolicy,
+                sandbox: opts?.sandbox ?? defaults.sandbox,
+                mcpServers: opts?.mcpServers ?? defaults.mcpServers,
+            });
+            logger.debug('[CodexAppServer] MCP thread context updated for resume:', threadId);
+            return { threadId, model: opts?.model ?? defaults.model ?? 'default' };
         }
 
         const defaults = this.threadDefaults ?? {};
@@ -771,6 +896,15 @@ export class CodexAppServerClient {
             throw new Error('No active thread. Call startThread first.');
         }
 
+        if (this.mode === 'mcp-server') {
+            // MCP mode: dispatch to the async MCP turn handler (non-blocking)
+            this.sendTurnViaMcp(prompt, opts).catch((err) => {
+                logger.debug('[CodexAppServer] sendTurnViaMcp error:', err);
+                this.resolvePendingTurn(true);
+            });
+            return;
+        }
+
         const input: InputItem[] = [
             { type: 'text', text: prompt },
         ];
@@ -811,6 +945,81 @@ export class CodexAppServerClient {
                 this.pendingTurnCompletion.turnId = turnId;
             }
         }
+    }
+
+    /**
+     * Execute a complete MCP turn via tools/call.
+     * Emits synthetic task_started, agent_message, task_complete events.
+     * Long-running (~minutes); resolves pendingTurnCompletion when done.
+     */
+    private async sendTurnViaMcp(prompt: string, opts?: {
+        model?: string;
+        cwd?: string;
+        approvalPolicy?: ApprovalPolicy;
+    }): Promise<void> {
+        const ctx = this.mcpThreadContext ?? {};
+        const isFirstTurn = this._threadId?.startsWith('mcp-pending-') ?? true;
+
+        // Emit synthetic task_started so the UI shows activity
+        this.markPendingTurnStarted(null);
+        this.eventHandler?.({ type: 'task_started' });
+
+        const toolName = isFirstTurn ? 'codex' : 'codex-reply';
+        const toolArgs: Record<string, unknown> = {
+            prompt,
+            model: opts?.model ?? ctx.model,
+            cwd: opts?.cwd ?? ctx.cwd ?? process.cwd(),
+        };
+        if (isFirstTurn) {
+            // First turn: include full context
+            if (opts?.approvalPolicy ?? ctx.approvalPolicy) {
+                toolArgs.approval_policy = opts?.approvalPolicy ?? ctx.approvalPolicy;
+            }
+        } else {
+            // Subsequent turns: include thread_id
+            toolArgs.thread_id = this._threadId;
+        }
+
+        logger.debug(`[CodexAppServer] MCP tools/call: ${toolName}`, toolArgs);
+
+        const result = await this.request('tools/call', {
+            name: toolName,
+            arguments: toolArgs,
+        }, CodexAppServerClient.TURN_TIMEOUT_MS) as {
+            content?: Array<{ type: string; text?: string }>;
+            _meta?: { thread_id?: string };
+            isError?: boolean;
+        };
+
+        // Extract real threadId from result if this was the first turn
+        if (isFirstTurn) {
+            const realThreadId = result?._meta?.thread_id;
+            if (typeof realThreadId === 'string' && realThreadId.length > 0) {
+                this._threadId = realThreadId;
+                logger.debug('[CodexAppServer] MCP real threadId:', realThreadId);
+            }
+        }
+
+        // Extract text response from content array
+        const text = result?.content
+            ?.filter((c) => c.type === 'text' && typeof c.text === 'string')
+            .map((c) => c.text ?? '')
+            .join('')
+            .trim() ?? '';
+
+        if (text.length > 0) {
+            this.eventHandler?.({
+                type: 'agent_message',
+                message: text,
+            });
+        }
+
+        const aborted = result?.isError === true;
+        this.eventHandler?.({
+            type: aborted ? 'turn_aborted' : 'task_complete',
+        });
+        this.tryResolvePendingTurn(aborted, null, 'mcp-tools/call');
+        this._turnId = null;
     }
 
     /** Default timeout for waiting on turn completion (ms). 10 minutes. */
@@ -871,6 +1080,10 @@ export class CodexAppServerClient {
     }
 
     async interruptTurn(): Promise<void> {
+        if (this.mode === 'mcp-server') {
+            logger.debug('[CodexAppServer] interruptTurn: no-op in mcp-server mode');
+            return;
+        }
         if (!this._threadId) return;
         if (!this._turnId) {
             logger.debug('[CodexAppServer] interruptTurn: no active turnId, skipping');
