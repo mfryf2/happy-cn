@@ -8,6 +8,7 @@
  * the --experimental-acp flag for ACP mode.
  */
 
+import { execSync } from 'node:child_process';
 import { AcpBackend, type AcpBackendOptions, type AcpPermissionHandler } from '../acp/AcpBackend';
 import type { AgentBackend, McpServerConfig, AgentFactoryOptions } from '../core';
 import { agentRegistry } from '../core';
@@ -63,6 +64,18 @@ export interface GeminiBackendResult {
 }
 
 /**
+ * Resolve the gemini command to use: prefer `gemini-internal` if available, fallback to `gemini`.
+ */
+function resolveGeminiCommand(): string {
+  try {
+    execSync('gemini-internal --version', { encoding: 'utf8', windowsHide: true, stdio: 'pipe' });
+    return 'gemini-internal';
+  } catch {
+    return 'gemini';
+  }
+}
+
+/**
  * Create a Gemini backend using ACP (official SDK).
  *
  * The Gemini CLI must be installed and available in PATH.
@@ -92,8 +105,8 @@ export function createGeminiBackend(options: GeminiBackendOptions): GeminiBacken
     logger.warn(`[Gemini] No API key found. Run 'happy connect gemini' to authenticate via Google OAuth, or set ${GEMINI_API_KEY_ENV} environment variable.`);
   }
 
-  // Command to run gemini
-  const geminiCommand = 'gemini';
+  // Command to run gemini — prefer `gemini-internal` if available, fallback to `gemini`
+  const geminiCommand = resolveGeminiCommand();
   
   // Get model from options, local config, system environment, or use default
   // Priority: options.model (if provided) > local config > env var > default
