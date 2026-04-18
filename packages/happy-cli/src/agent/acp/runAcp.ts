@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import React from 'react';
+import { render, type Instance } from 'ink';
 import { ApiClient } from '@/api/api';
 import type { ApiSessionClient } from '@/api/apiSession';
 import type { AgentMessage } from '@/agent/core';
@@ -9,6 +11,8 @@ import { AcpSessionManager } from './AcpSessionManager';
 import type { SessionEnvelope } from '@slopus/happy-wire';
 import { extractText, extractTextOrEmpty, normalizeContent } from '@slopus/happy-wire';
 import { logger } from '@/ui/logger';
+import { MessageBuffer } from '@/ui/ink/messageBuffer';
+import { AcpDisplay } from '@/ui/ink/AcpDisplay';
 import { MessageQueue2 } from '@/utils/MessageQueue2';
 import { hashObject } from '@/utils/deterministicJson';
 import { Credentials, readSettings } from '@/persistence';
@@ -74,6 +78,10 @@ function colorizeAcpLine(kind: AcpLogKind, line: string): string {
 function logAcp(kind: AcpLogKind, message: string): void {
   const line = `[${formatAcpTime()}] ${message}`;
   console.log(colorizeAcpLine(kind, line));
+}
+
+function hasTTY(): boolean {
+  return process.stdout.isTTY === true && process.stdin.isTTY === true;
 }
 
 function toSingleLine(text: string): string {
@@ -543,6 +551,28 @@ export async function runAcp(opts: {
   let abortController = new AbortController();
   let pendingTurn: PendingTurn | null = null;
 
+  // Ink UI (TTY only)
+  const useInkUI = hasTTY() && !verbose;
+  const messageBuffer = useInkUI ? new MessageBuffer() : null;
+  let inkInstance: Instance | null = null;
+  let isResponseInProgress = false;
+
+  if (useInkUI && messageBuffer) {
+    inkInstance = render(
+      React.createElement(AcpDisplay, {
+        messageBuffer,
+        agentName: opts.agentName,
+        logPath: logger.getLogPath?.(),
+        onExit: () => {
+          shouldExit = true;
+          messageQueue.close();
+          clearPendingTurn(new Error('User requested exit'));
+        },
+      }),
+      { exitOnCtrlC: false, patchConsole: true },
+    );
+  }
+
   const clearPendingTurn = (error?: Error) => {
     if (!pendingTurn) {
       return;
@@ -796,11 +826,18 @@ export async function runAcp(opts: {
     if (msg.type === 'status') {
       const suffix = msg.detail ? `: ${msg.detail}` : '';
       const statusLine = `Status: ${msg.status}${suffix}`;
-      logAcp('muted', statusLine);
+      if (!useInkUI) {
+        logAcp('muted', statusLine);
+      }
       const nextThinking = msg.status === 'running';
       if (thinking !== nextThinking) {
         thinking = nextThinking;
         session.keepAlive(thinking, 'remote');
+      }
+      if (msg.status === 'running' && messageBuffer) {
+        // Reset response tracking on new turn start
+        isResponseInProgress = false;
+        messageBuffer.addMessage('Thinking...', 'system');
       }
       if (msg.status === 'idle') {
         clearPendingTurn();
@@ -810,9 +847,35 @@ export async function runAcp(opts: {
       }
     }
 
-    const frontendMessage = formatAcpMessageForFrontend(opts.agentName, msg, verbose);
-    if (frontendMessage) {
-      logAcp(frontendMessage.kind, frontendMessage.text);
+    if (useInkUI && messageBuffer) {
+      // Route messages to ink UI
+      if (msg.type === 'model-output') {
+        const delta = msg.textDelta ?? msg.fullText ?? '';
+        if (delta) {
+          if (!isResponseInProgress) {
+            isResponseInProgress = true;
+            messageBuffer.addMessage(delta, 'assistant');
+          } else {
+            messageBuffer.updateLastMessage(delta, 'assistant');
+          }
+        }
+      } else if (msg.type === 'tool-call') {
+        isResponseInProgress = false;
+        messageBuffer.addMessage(`Executing: ${msg.toolName}...`, 'tool');
+      } else if (msg.type === 'tool-result') {
+        const rawResult = msg.result;
+        const resultText = typeof rawResult === 'string' ? rawResult : JSON.stringify(rawResult);
+        messageBuffer.addMessage(`Result: ${truncateForConsole(toSingleLine(resultText), ACP_EVENT_PREVIEW_CHARS)}`, 'result');
+      } else if (msg.type === 'event' && msg.name === 'thinking') {
+        const thinkingText = extractThinkingText(msg.payload);
+        const preview = truncateForConsole(toSingleLine(thinkingText), ACP_EVENT_PREVIEW_CHARS);
+        messageBuffer.updateLastMessage(`[Thinking] ${preview}...`, 'system');
+      }
+    } else {
+      const frontendMessage = formatAcpMessageForFrontend(opts.agentName, msg, verbose);
+      if (frontendMessage) {
+        logAcp(frontendMessage.kind, frontendMessage.text);
+      }
     }
 
     sendEnvelopes(sessionManager.mapMessage(msg));
@@ -837,6 +900,15 @@ export async function runAcp(opts: {
     }
 
     const imageBlocks = blocks.filter(b => b.type === 'image_url');
+
+    if (messageBuffer) {
+      const userText = extractTextOrEmpty(blocks);
+      if (userText) {
+        isResponseInProgress = false;
+        messageBuffer.addMessage(userText, 'user');
+      }
+    }
+
     messageQueue.push(extractTextOrEmpty(blocks), {
       permissionMode: currentPermissionMode,
       model: currentModel,
@@ -902,7 +974,9 @@ export async function runAcp(opts: {
         throw new Error('ACP session is not started');
       }
 
-      logAcp('incoming', `Incoming prompt: ${formatUnknownForConsole(batch.message, ACP_EVENT_PREVIEW_CHARS)}`);
+      if (!useInkUI) {
+        logAcp('incoming', `Incoming prompt: ${formatUnknownForConsole(batch.message, ACP_EVENT_PREVIEW_CHARS)}`);
+      }
       sendEnvelopes(sessionManager.startTurn());
       const turnEnded = waitForTurnEnd();
       try {
@@ -922,7 +996,11 @@ export async function runAcp(opts: {
       } catch (error) {
         sendEnvelopes(sessionManager.endTurn('failed'));
         session.sendSessionEvent({ type: 'ready' });
-        logAcp('error', `Prompt error from ${opts.agentName}: ${error instanceof Error ? error.message : String(error)}`);
+        if (!useInkUI) {
+          logAcp('error', `Prompt error from ${opts.agentName}: ${error instanceof Error ? error.message : String(error)}`);
+        } else if (messageBuffer) {
+          messageBuffer.addMessage(`Error: ${error instanceof Error ? error.message : String(error)}`, 'status');
+        }
         clearPendingTurn(error instanceof Error ? error : new Error(String(error)));
         throw error;
       }
@@ -931,6 +1009,12 @@ export async function runAcp(opts: {
     clearInterval(keepAliveInterval);
     reconnectionHandle?.cancel();
     clearPendingTurn(new Error('ACP runner shutting down'));
+
+    if (inkInstance) {
+      inkInstance.unmount();
+      inkInstance = null;
+    }
+    messageBuffer?.clear();
 
     try {
       permissionHandler.reset();
