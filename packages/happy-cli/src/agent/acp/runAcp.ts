@@ -1015,6 +1015,15 @@ export async function runAcp(opts: {
       }
     }
   } finally {
+    // Watchdog: if cleanup hangs (e.g. unresolved backoff retries in updateMetadata keep
+    // the event loop alive), force-exit after 8 seconds so Ctrl+C is always responsive.
+    const shutdownWatchdog = setTimeout(() => {
+      logger.debug(`[${opts.agentName}] Shutdown watchdog triggered — forcing exit`);
+      process.exit(0);
+    }, 8000);
+    // unref() means this timer won't *prevent* a clean exit if everything finishes first
+    shutdownWatchdog.unref();
+
     clearInterval(keepAliveInterval);
     reconnectionHandle?.cancel();
     clearPendingTurn(new Error('ACP runner shutting down'));
@@ -1054,5 +1063,8 @@ export async function runAcp(opts: {
     } catch (error) {
       logger.debug(`[${opts.agentName}] Session close failed:`, error);
     }
+
+    // Normal cleanup completed — cancel watchdog to allow natural exit
+    clearTimeout(shutdownWatchdog);
   }
 }
