@@ -31,7 +31,7 @@ import type { ApiSessionClient } from '@/api/apiSession';
 import { resolveCodexExecutionPolicy } from './executionPolicy';
 import { mapCodexMcpMessageToSessionEnvelopes, mapCodexProcessorMessageToSessionEnvelopes } from './utils/sessionProtocolMapper';
 import { resumeExistingThread } from './resumeExistingThread';
-import { extractTextOrEmpty, normalizeContent } from '@slopus/happy-wire';
+import { extractTextOrEmpty, normalizeContent, type ContentBlock } from '@slopus/happy-wire';
 
 type ReadyEventOptions = {
     pending: unknown;
@@ -212,7 +212,8 @@ export async function runCodex(opts: {
             permissionMode: messagePermissionMode || 'default',
             model: messageModel,
         };
-        messageQueue.push(extractTextOrEmpty(normalizeContent(message.content)), enhancedMode);
+        const blocks = Array.isArray(message.content) ? message.content as ContentBlock[] : undefined;
+        messageQueue.push(extractTextOrEmpty(normalizeContent(message.content)), enhancedMode, blocks);
     });
     let thinking = false;
     let currentTurnId: string | null = null;
@@ -481,7 +482,18 @@ export async function runCodex(opts: {
         } else if (msg.type === 'task_complete') {
             // Ready is emitted from the main loop's idle check so pushes only fire once
             // after the queue is actually drained.
-            messageBuffer.addMessage('Task completed', 'status');
+            const taskStatus = (msg as any).status as string | undefined;
+            const taskError = (msg as any).error;
+            if (taskStatus === 'failed' || taskStatus === 'error') {
+                const errMsg = taskError
+                    ? (typeof taskError === 'string' ? taskError : (taskError as any).message ?? JSON.stringify(taskError))
+                    : 'Unknown error';
+                messageBuffer.addMessage(`Task failed: ${errMsg}`, 'status');
+                // Also propagate the error to the remote session so the UI shows it
+                session.sendSessionEvent({ type: 'message', message: `Task failed: ${errMsg}` });
+            } else {
+                messageBuffer.addMessage('Task completed', 'status');
+            }
         } else if (msg.type === 'turn_aborted') {
             messageBuffer.addMessage('Turn aborted', 'status');
         }
@@ -580,11 +592,11 @@ export async function runCodex(opts: {
             first = false;
         }
 
-        let pending: { message: string; mode: EnhancedMode; isolate: boolean; hash: string } | null = null;
+        let pending: { message: string; mode: EnhancedMode; isolate: boolean; hash: string; blocks?: ContentBlock[] } | null = null;
 
         while (!shouldExit) {
             logActiveHandles('loop-top');
-            let message: { message: string; mode: EnhancedMode; isolate: boolean; hash: string } | null = pending;
+            let message: { message: string; mode: EnhancedMode; isolate: boolean; hash: string; blocks?: ContentBlock[] } | null = pending;
             pending = null;
             if (!message) {
                 // Capture the current signal to distinguish idle-abort from queue close
@@ -642,6 +654,7 @@ export async function runCodex(opts: {
                     model: message.mode.model,
                     approvalPolicy: executionPolicy.approvalPolicy,
                     sandbox: executionPolicy.sandbox,
+                    blocks: message.blocks,
                 });
                 first = false;
 

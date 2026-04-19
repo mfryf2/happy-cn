@@ -548,6 +548,7 @@ export async function runAcp(opts: {
   let thinking = false;
   let acpSessionId: string | null = null;
   let shouldExit = false;
+  let isAbortInFlight = false;
   let abortController = new AbortController();
   let pendingTurn: PendingTurn | null = null;
 
@@ -843,7 +844,14 @@ export async function runAcp(opts: {
         clearPendingTurn();
       }
       if (msg.status === 'error' || msg.status === 'stopped') {
-        stopRunnerFromBackendStatus(msg.status, msg.detail);
+        if (isAbortInFlight) {
+          // 用户主动 abort：backend 确认取消后发来 stopped/error，会话保持活跃
+          logger.debug(`[${opts.agentName}] Backend ${msg.status} received during user abort — keeping session alive`);
+          clearPendingTurn();
+        } else {
+          // Backend 自行停止：真正退出
+          stopRunnerFromBackendStatus(msg.status, msg.detail);
+        }
       }
     }
 
@@ -885,7 +893,8 @@ export async function runAcp(opts: {
 
   session.onUserMessage((message) => {
     const blocks = normalizeContent(message.content);
-    if (!extractText(blocks)) {
+    const imageBlocks = blocks.filter(b => b.type === 'image_url');
+    if (!extractText(blocks) && imageBlocks.length === 0) {
       return;
     }
 
@@ -898,8 +907,6 @@ export async function runAcp(opts: {
       currentModel = message.meta.model ?? null;
       logger.debug(`[${opts.agentName}] Requested ACP model: ${currentModel ?? 'null'}`);
     }
-
-    const imageBlocks = blocks.filter(b => b.type === 'image_url');
 
     if (messageBuffer) {
       const userText = extractTextOrEmpty(blocks);
@@ -921,6 +928,7 @@ export async function runAcp(opts: {
   }, 2000);
 
   async function handleAbort() {
+    isAbortInFlight = true;
     try {
       if (acpSessionId) {
         await backend.cancel(acpSessionId);
@@ -930,6 +938,7 @@ export async function runAcp(opts: {
     } catch (error) {
       logger.debug(`[${opts.agentName}] Abort failed:`, error);
     } finally {
+      isAbortInFlight = false;
       abortController = new AbortController();
     }
   }

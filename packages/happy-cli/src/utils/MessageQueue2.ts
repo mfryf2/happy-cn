@@ -261,13 +261,15 @@ export class MessageQueue2<T> {
         let mode = firstItem.mode;
         let isolate = firstItem.isolate ?? false;
         const targetModeHash = firstItem.modeHash;
-        let blocks: ContentBlock[] | undefined;
+        const allBlocks: ContentBlock[] = [];
 
         // If the first message requires isolation, only process it alone
         if (firstItem.isolate) {
             const item = this.queue.shift()!;
             sameModeMessages.push(item.message);
-            blocks = item.blocks;
+            if (item.blocks) {
+                allBlocks.push(...item.blocks);
+            }
             logger.debug(`[MessageQueue2] Collected isolated message with mode hash: ${targetModeHash}`);
         } else {
             // Collect all messages with the same mode until we hit an isolated message
@@ -276,13 +278,15 @@ export class MessageQueue2<T> {
                 !this.queue[0].isolate) {
                 const item = this.queue.shift()!;
                 sameModeMessages.push(item.message);
-                // Use blocks from the first item that has them
-                if (!blocks && item.blocks) {
-                    blocks = item.blocks;
+                // Merge blocks from all items
+                if (item.blocks) {
+                    allBlocks.push(...item.blocks);
                 }
             }
             logger.debug(`[MessageQueue2] Collected batch of ${sameModeMessages.length} messages with mode hash: ${targetModeHash}`);
         }
+
+        const blocks = allBlocks.length > 0 ? allBlocks : undefined;
 
         // Join all messages with newlines
         const combinedMessage = sameModeMessages.join('\n');

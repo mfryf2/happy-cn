@@ -1,18 +1,21 @@
 /**
- * Codex App Server Client — drives Codex via the v2 JSON-RPC protocol
- * (`codex app-server`), replacing the legacy MCP-based CodexMcpClient.
+ * Codex App Server Client — drives Codex via JSON-RPC 2.0 over stdio.
+ *
+ * Supports two transport modes:
+ *  - `app-server` (upstream OpenAI Codex): `codex app-server --listen stdio://`
+ *  - `mcp-server` (Tencent codex-internal): `codex-internal mcp-server` with direct gateway env injection
  *
  * Protocol: JSON-RPC 2.0 over stdio (newline-delimited JSON).
- * Reference: codex-rs/app-server/README.md in the openai/codex repo.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { logger } from '@/ui/logger';
 import { execSync } from 'child_process';
+import axios from 'axios';
 import type {
     InitializeParams,
     NewConversationParams,
@@ -33,6 +36,7 @@ import type {
 import type { SandboxConfig } from '@/persistence';
 import { initializeSandbox, wrapForMcpTransport } from '@/sandbox/manager';
 import packageJson from '../../package.json';
+import type { ContentBlock, ImageUrlBlock } from '@slopus/happy-wire';
 
 type PendingRequest = {
     resolve: (result: unknown) => void;
@@ -80,7 +84,7 @@ function detectCodexBinary(): 'codex' | 'codex-internal' | null {
 }
 
 /**
- * Load authentication environment variables for codex-internal.
+ * Load authentication environment variables for codex-internal (mcp-server mode).
  *
  * codex-internal's `mcp-server` subcommand bypasses its own `prepareEnvironment()`
  * (which is only called in interactive/login flows), so the internal gateway URL
@@ -88,14 +92,13 @@ function detectCodexBinary(): 'codex' | 'codex-internal' | null {
  *
  * We replicate the same logic here:
  *  - Read accessToken from ~/.codex-internal/config.json
- *  - Set openai_base_url to the Tencent internal gateway
  *  - Set OPENAI_API_KEY / CODEX_API_KEY / AUTH_TOKEN to the accessToken
- *  - Clear any stale OPENAI_* env vars that would override the base URL
+ *  - Clear any stale OPENAI_* and CODEX_INTERNAL_* env vars
+ *  - Point openai_base_url directly at the internal gateway
  */
 function loadCodexInternalEnv(env: Record<string, string>): void {
     const CODEX_INTERNAL_GATEWAY = 'https://copilot.code.woa.com/server/chat/codebuddy-gateway/codex';
     const configPath = join(homedir(), '.codex-internal', 'config.json');
-
     let accessToken: string | null = null;
     try {
         const raw = readFileSync(configPath, 'utf8');
@@ -106,17 +109,14 @@ function loadCodexInternalEnv(env: Record<string, string>): void {
     } catch {
         logger.debug('[CodexAppServer] codex-internal: could not read config.json, skipping token injection');
     }
-
-    // Clear upstream OPENAI_* overrides that would bypass the internal gateway
+    // Clear upstream OPENAI_* AND CODEX_INTERNAL_* overrides
     for (const key of Object.keys(env)) {
         if (key.toUpperCase().startsWith('OPENAI_') || key.toUpperCase().startsWith('CODEX_INTERNAL_')) {
             delete env[key];
         }
     }
-
-    // Inject internal gateway URL (codex-internal reads this env var as its base URL)
+    // Inject internal gateway URL
     env.openai_base_url = CODEX_INTERNAL_GATEWAY;
-
     if (accessToken) {
         env.OPENAI_API_KEY = accessToken;
         env.CODEX_API_KEY = accessToken;
@@ -156,6 +156,31 @@ function normalizeRawFileChangeList(changes: unknown): LegacyPatchChanges | unde
 
     return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
+
+/**
+ * Download an image from a URL to a temporary file and return the local path.
+ * This allows Codex to receive the actual image bytes regardless of whether the
+ * URL is publicly accessible (e.g. localhost-only dev URLs won't work for remote AI).
+ */
+async function downloadImageToTempFile(url: string): Promise<string> {
+    const response = await axios.get<Buffer>(url, {
+        responseType: 'arraybuffer',
+        timeout: 30_000,
+    });
+
+    // Detect extension from Content-Type header, fall back to .jpg
+    const contentType = (response.headers['content-type'] as string | undefined) ?? '';
+    let ext = '.jpg';
+    if (contentType.includes('png')) ext = '.png';
+    else if (contentType.includes('gif')) ext = '.gif';
+    else if (contentType.includes('webp')) ext = '.webp';
+
+    const tempPath = join(tmpdir(), `codex-img-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
+    writeFileSync(tempPath, Buffer.from(response.data));
+    return tempPath;
+}
+
+
 
 export class CodexAppServerClient {
     private process: ChildProcess | null = null;
@@ -198,6 +223,8 @@ export class CodexAppServerClient {
     private notificationProtocol: 'unknown' | 'legacy' | 'raw' = 'unknown';
     private completedTurnIds = new Set<string>();
     private rawFileChangesByItemId = new Map<string, LegacyPatchChanges>();
+    // Temp files created for the current turn's image downloads; cleaned up after sendTurnAndWait resolves.
+    private _tempFilesForCurrentTurn: string[] = [];
 
     // Handlers set by the consumer (runCodex.ts)
     private eventHandler: ((msg: EventMsg) => void) | null = null;
@@ -447,19 +474,19 @@ export class CodexAppServerClient {
             );
         }
 
+        // codex-internal uses mcp-server mode with direct gateway env injection.
+        // Upstream codex uses app-server mode.
         this.mode = detectedBinary === 'codex-internal' ? 'mcp-server' : 'app-server';
         logger.debug(`[CodexAppServer] Detected binary: ${detectedBinary}, mode: ${this.mode}`);
 
         let command: string = detectedBinary;
-        let args = this.mode === 'mcp-server'
-            ? ['mcp-server']
-            : ['app-server', '--listen', 'stdio://'];
+        let args = this.mode === 'mcp-server' ? ['mcp-server'] : ['app-server', '--listen', 'stdio://'];
         this.sandboxEnabled = false;
 
-        if (this.sandboxConfig?.enabled && process.platform !== 'win32' && this.mode === 'app-server') {
+        if (this.sandboxConfig?.enabled && process.platform !== 'win32') {
             try {
                 this.sandboxCleanup = await initializeSandbox(this.sandboxConfig, process.cwd());
-                const wrapped = await wrapForMcpTransport('codex', ['app-server', '--listen', 'stdio://']);
+                const wrapped = await wrapForMcpTransport(detectedBinary, args);
                 command = wrapped.command;
                 args = wrapped.args;
                 this.sandboxEnabled = true;
@@ -486,9 +513,8 @@ export class CodexAppServerClient {
             env.CODEX_SANDBOX = 'seatbelt';
         }
 
-        // codex-internal mcp-server bypasses its own prepareEnvironment(), so
-        // we must inject the internal gateway URL and access token ourselves.
-        if (this.mode === 'mcp-server') {
+        // For codex-internal: inject internal gateway URL and access token directly
+        if (detectedBinary === 'codex-internal') {
             loadCodexInternalEnv(env);
         }
 
@@ -891,6 +917,7 @@ export class CodexAppServerClient {
         approvalPolicy?: ApprovalPolicy;
         sandbox?: SandboxMode;
         effort?: ReasoningEffort;
+        blocks?: ContentBlock[];
     }): Promise<void> {
         if (!this._threadId) {
             throw new Error('No active thread. Call startThread first.');
@@ -905,9 +932,35 @@ export class CodexAppServerClient {
             return;
         }
 
-        const input: InputItem[] = [
-            { type: 'text', text: prompt },
-        ];
+        const input: InputItem[] = [];
+
+        // Add text item only if there is text content
+        if (prompt.trim().length > 0) {
+            input.push({ type: 'text', text: prompt });
+        }
+
+        // Map image_url ContentBlocks to Codex InputItem localImages.
+        // We download the image to a temp file so Codex receives the actual bytes
+        // regardless of whether the URL is publicly reachable (e.g. localhost dev URLs).
+        if (opts?.blocks) {
+            for (const block of opts.blocks) {
+                if (block.type === 'image_url') {
+                    try {
+                        const tempPath = await downloadImageToTempFile(block.url);
+                        this._tempFilesForCurrentTurn.push(tempPath);
+                        input.push({ type: 'localImage', path: tempPath });
+                    } catch (err) {
+                        logger.warn('[CodexAppServer] Failed to download image, falling back to URL:', block.url, err);
+                        input.push({ type: 'image', url: block.url });
+                    }
+                }
+            }
+        }
+
+        // Ensure there is at least one input item
+        if (input.length === 0) {
+            input.push({ type: 'text', text: prompt });
+        }
 
         // Build params — only include optional fields when set (server uses thread defaults otherwise)
         const params: Record<string, unknown> = {
@@ -956,6 +1009,7 @@ export class CodexAppServerClient {
         model?: string;
         cwd?: string;
         approvalPolicy?: ApprovalPolicy;
+        blocks?: ContentBlock[];
     }): Promise<void> {
         const ctx = this.mcpThreadContext ?? {};
         const isFirstTurn = this._threadId?.startsWith('mcp-pending-') ?? true;
@@ -964,9 +1018,44 @@ export class CodexAppServerClient {
         this.markPendingTurnStarted(null);
         this.eventHandler?.({ type: 'task_started' });
 
+        // Handle images: codex-internal MCP tool schema has no image parameters.
+        // Strategy: download images to local temp files and embed their paths in the prompt.
+        // The codex model will use its built-in view_image tool to read the files.
+        //
+        // Known limitation: codex-internal's view_image tool in MCP mode may return
+        // re-encoded/resized images. The model still receives valid image data and can
+        // usually describe the content, though accuracy may vary for some image types.
+        let fullPrompt = prompt;
+        if (opts?.blocks) {
+            const imageBlocks = opts.blocks.filter((b): b is ImageUrlBlock => b.type === 'image_url');
+            if (imageBlocks.length > 0) {
+                logger.debug(`[CodexAppServer] MCP: ${imageBlocks.length} image(s) detected, downloading to temp files`);
+                const downloadedPaths: string[] = [];
+                for (const block of imageBlocks) {
+                    try {
+                        const tempPath = await downloadImageToTempFile(block.url);
+                        this._tempFilesForCurrentTurn.push(tempPath);
+                        downloadedPaths.push(tempPath);
+                        logger.debug(`[CodexAppServer] MCP: downloaded image → ${tempPath}`);
+                    } catch (err) {
+                        logger.warn(`[CodexAppServer] MCP: failed to download image ${block.url}:`, err);
+                    }
+                }
+                if (downloadedPaths.length > 0) {
+                    const pathList = downloadedPaths.map((p) => `  - ${p}`).join('\n');
+                    const imageInstruction =
+                        `\n\n[The user attached ${downloadedPaths.length} image(s). ` +
+                        `Please view the following image file(s) to see what they sent:\n${pathList}\n` +
+                        `View each file and incorporate the image content into your response.]`;
+                    fullPrompt = fullPrompt + imageInstruction;
+                    logger.debug(`[CodexAppServer] MCP: injected ${downloadedPaths.length} image path(s) into prompt`);
+                }
+            }
+        }
+
         const toolName = isFirstTurn ? 'codex' : 'codex-reply';
         const toolArgs: Record<string, unknown> = {
-            prompt,
+            prompt: fullPrompt,
             model: opts?.model ?? ctx.model,
             cwd: opts?.cwd ?? ctx.cwd ?? process.cwd(),
         };
@@ -991,21 +1080,48 @@ export class CodexAppServerClient {
             isError?: boolean;
         };
 
-        // Extract real threadId from result if this was the first turn
+        // Extract real threadId from result if this was the first turn.
+        // codex-internal returns {threadId, content} as JSON inside content[0].text,
+        // NOT in result._meta.thread_id — parse accordingly.
         if (isFirstTurn) {
-            const realThreadId = result?._meta?.thread_id;
-            if (typeof realThreadId === 'string' && realThreadId.length > 0) {
-                this._threadId = realThreadId;
-                logger.debug('[CodexAppServer] MCP real threadId:', realThreadId);
+            const textContent = result?.content?.find((c) => c.type === 'text')?.text;
+            if (textContent) {
+                try {
+                    const parsed = JSON.parse(textContent) as { threadId?: string; content?: string };
+                    if (typeof parsed.threadId === 'string' && parsed.threadId.length > 0) {
+                        this._threadId = parsed.threadId;
+                        logger.debug('[CodexAppServer] MCP real threadId from content:', parsed.threadId);
+                    }
+                } catch {
+                    // Not JSON — fallback to checking _meta (upstream Codex may use this)
+                    const metaThreadId = result?._meta?.thread_id;
+                    if (typeof metaThreadId === 'string' && metaThreadId.length > 0) {
+                        this._threadId = metaThreadId;
+                        logger.debug('[CodexAppServer] MCP real threadId from _meta:', metaThreadId);
+                    }
+                }
             }
         }
 
-        // Extract text response from content array
-        const text = result?.content
+        // Extract text response from content array.
+        // codex-internal wraps its response as JSON {threadId, content} in content[0].text;
+        // upstream Codex returns plain text. Handle both.
+        const rawText = result?.content
             ?.filter((c) => c.type === 'text' && typeof c.text === 'string')
             .map((c) => c.text ?? '')
             .join('')
             .trim() ?? '';
+        let text = rawText;
+        if (rawText.length > 0) {
+            try {
+                const parsed = JSON.parse(rawText) as { threadId?: string; content?: string };
+                if (typeof parsed.content === 'string') {
+                    text = parsed.content;
+                }
+            } catch {
+                // Plain text — use as-is
+            }
+        }
 
         if (text.length > 0) {
             this.eventHandler?.({
@@ -1036,6 +1152,7 @@ export class CodexAppServerClient {
         sandbox?: SandboxMode;
         effort?: ReasoningEffort;
         turnTimeoutMs?: number;
+        blocks?: ContentBlock[];
     }): Promise<{ aborted: boolean }> {
         // Wait for any in-flight interruptTurn() to complete before starting a new
         // turn. Otherwise the stale turn/interrupt RPC can reach Codex after our
@@ -1047,6 +1164,9 @@ export class CodexAppServerClient {
             // (harmlessly, since pendingTurnCompletion is null at this point).
             await new Promise(resolve => setTimeout(resolve, 0));
         }
+
+        // Reset temp file tracking for this turn
+        this._tempFilesForCurrentTurn = [];
 
         const timeoutMs = opts?.turnTimeoutMs ?? CodexAppServerClient.TURN_TIMEOUT_MS;
         let timer: ReturnType<typeof setTimeout> | null = null;
@@ -1071,12 +1191,26 @@ export class CodexAppServerClient {
         } catch (err) {
             if (timer) clearTimeout(timer);
             this.pendingTurnCompletion = null;
+            this.cleanupTempFiles();
             throw err;
         }
 
         const aborted = await completion;
         if (timer) clearTimeout(timer);
+        this.cleanupTempFiles();
         return { aborted };
+    }
+
+    /** Remove any temp image files created during the last turn. */
+    private cleanupTempFiles(): void {
+        for (const filePath of this._tempFilesForCurrentTurn) {
+            try {
+                unlinkSync(filePath);
+            } catch {
+                // Ignore — file may already be gone
+            }
+        }
+        this._tempFilesForCurrentTurn = [];
     }
 
     async interruptTurn(): Promise<void> {
