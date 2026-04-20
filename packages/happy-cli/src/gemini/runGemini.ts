@@ -38,7 +38,7 @@ import { GeminiPermissionHandler } from '@/gemini/utils/permissionHandler';
 import { GeminiReasoningProcessor } from '@/gemini/utils/reasoningProcessor';
 import { GeminiDiffProcessor } from '@/gemini/utils/diffProcessor';
 import type { GeminiMode, CodexMessagePayload } from '@/gemini/types';
-import type { PermissionMode } from '@/api/types';
+import type { PermissionMode, ContentBlock } from '@/api/types';
 import { GEMINI_MODEL_ENV, DEFAULT_GEMINI_MODEL, CHANGE_TITLE_INSTRUCTION } from '@/gemini/constants';
 import {
   readGeminiLocalConfig,
@@ -263,7 +263,9 @@ export async function runGemini(opts: {
 
     // Build the full prompt with appendSystemPrompt if provided
     // Only include system prompt for the first message to avoid forcing tool usage on every message
-    const originalUserMessage = extractText(normalizeContent(message.content)) ?? '';
+    const blocks = normalizeContent(message.content);
+    const imageBlocks = blocks.filter(b => b.type === 'image_url');
+    const originalUserMessage = extractText(blocks) ?? '';
     let fullPrompt = originalUserMessage;
     if (isFirstMessage && message.meta?.appendSystemPrompt) {
       // Prepend system prompt to user message only for first message
@@ -280,7 +282,7 @@ export async function runGemini(opts: {
       model: messageModel,
       originalUserMessage, // Store original message separately
     };
-    messageQueue.push(fullPrompt, mode);
+    messageQueue.push(fullPrompt, mode, imageBlocks.length > 0 ? imageBlocks : undefined);
     
     // Record user message in conversation history for context preservation
     conversationHistory.addUserMessage(originalUserMessage);
@@ -896,7 +898,7 @@ export async function runGemini(opts: {
     let pending: { message: string; mode: GeminiMode; isolate: boolean; hash: string } | null = null;
 
     while (!shouldExit) {
-      let message: { message: string; mode: GeminiMode; isolate: boolean; hash: string } | null = pending;
+      let message: { message: string; mode: GeminiMode; isolate: boolean; hash: string; blocks?: ContentBlock[] } | null = pending;
       pending = null;
 
       if (!message) {
@@ -1086,7 +1088,7 @@ export async function runGemini(opts: {
         
         for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
           try {
-            await geminiBackend.sendPrompt(acpSessionId, promptToSend);
+            await geminiBackend.sendPrompt(acpSessionId, promptToSend, message.blocks);
             logger.debug('[gemini] Prompt sent successfully');
             
             // Wait for Gemini to finish responding (all chunks received + final idle)
